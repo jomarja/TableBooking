@@ -302,7 +302,7 @@ export default function RestaurantsPage() {
                           <button
                             key={cat.id}
                             onClick={() => toggleCuisineFilter(cat.id)}
-                            className={`px-3 py-1 rounded-full text-xs font-medium transition-all ${
+                            className={`inline-flex items-center gap-1 whitespace-nowrap px-3 py-1 rounded-full text-xs font-medium transition-all ${
                               filters.cuisineType.includes(cat.id)
                                 ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
                                 : 'bg-gray-100 text-gray-600 border border-transparent hover:bg-gray-200'
