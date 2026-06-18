@@ -2,10 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   FiCheck,
-  FiDownloadCloud,
   FiArrowRight,
   FiArrowLeft,
-  FiRefreshCw,
   FiX,
   FiPlus,
   FiTrash2,
@@ -51,9 +49,6 @@ export default function SetupWizardPage() {
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [importNote, setImportNote] = useState('');
-  const [syncing, setSyncing] = useState(false);
 
   // Step 0 — Restaurant Info
   const [info, setInfo] = useState({
@@ -64,10 +59,6 @@ export default function SetupWizardPage() {
     phone: '',
     description: '',
     priceLevel: 1,
-    importUrl: '',
-    rating: 0,
-    reviewCount: 0,
-    googleSyncedAt: null as string | null,
     restDays: [] as string[],
   });
 
@@ -113,9 +104,6 @@ export default function SetupWizardPage() {
       phone: restaurant.phone || '',
       description: restaurant.description || '',
       priceLevel: restaurant.priceLevel || 1,
-      rating: restaurant.rating || 0,
-      reviewCount: restaurant.reviewCount || 0,
-      googleSyncedAt: restaurant.googleSyncedAt || null,
       restDays: restaurant.restDays || [],
     }));
     setHours((p) => ({
@@ -137,57 +125,6 @@ export default function SetupWizardPage() {
       });
     }
   }, [restaurant]);
-
-  const runImport = async () => {
-    if (!info.importUrl) return;
-    setImporting(true);
-    setImportNote('');
-    try {
-      const res = await api.importMaps(info.importUrl);
-      const d = res.data as Record<string, any>;
-      setInfo((p) => ({
-        ...p,
-        name: d.name || p.name,
-        address: d.address || p.address,
-        website: d.website || p.website,
-        phone: d.phone || p.phone,
-        priceLevel: d.priceLevel || p.priceLevel,
-        rating: d.rating || p.rating,
-        reviewCount: d.reviewCount || p.reviewCount,
-        googleSyncedAt: new Date().toISOString(),
-      }));
-      if (d.openingTime) {
-        setHours((p) => ({
-          ...p,
-          openingTime: d.openingTime,
-          kitchenClosing: d.kitchenClosing || p.kitchenClosing,
-          closingTime: d.closingTime || p.closingTime,
-        }));
-      }
-      setImportNote('Imported from Google Maps — please review and edit the values below.');
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const runSync = async () => {
-    if (!restaurant) return;
-    setSyncing(true);
-    try {
-      const updated = await api.syncGoogle(restaurant.id, info.importUrl || undefined);
-      setInfo((p) => ({
-        ...p,
-        rating: (updated as any).rating || p.rating,
-        reviewCount: (updated as any).reviewCount || p.reviewCount,
-        website: (updated as any).website || p.website,
-        phone: (updated as any).phone || p.phone,
-        googleSyncedAt: (updated as any).googleSyncedAt || new Date().toISOString(),
-      }));
-      setImportNote('Synced with Google — rating and operational info updated.');
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const back = () => setStep((s) => Math.max(s - 1, 0));
@@ -363,38 +300,6 @@ export default function SetupWizardPage() {
             <div className="space-y-5">
               <h2 className="text-lg font-bold text-slate-800">Restaurant Information</h2>
 
-              {/* Google import helper */}
-              <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 space-y-2">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-semibold text-indigo-700">Import from Google Maps <span className="font-normal text-indigo-400">(optional)</span></p>
-                  {info.googleSyncedAt && (
-                    <button
-                      onClick={runSync}
-                      disabled={syncing}
-                      className="flex items-center gap-1 text-xs text-indigo-600 hover:text-indigo-800 disabled:opacity-60"
-                    >
-                      <FiRefreshCw size={12} className={syncing ? 'animate-spin' : ''} /> Sync with Google
-                    </button>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    className="tb-input flex-1"
-                    placeholder="Paste a Google Maps place URL…"
-                    value={info.importUrl}
-                    onChange={(e) => setInfo({ ...info, importUrl: e.target.value })}
-                  />
-                  <button
-                    onClick={runImport}
-                    disabled={importing || !info.importUrl}
-                    className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 whitespace-nowrap disabled:opacity-60"
-                  >
-                    <FiDownloadCloud /> {importing ? 'Importing…' : 'Import'}
-                  </button>
-                </div>
-                {importNote && <p className="text-xs text-emerald-600">{importNote}</p>}
-              </div>
-
               {/* Core info */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <Field label="Restaurant Name *">
@@ -494,27 +399,6 @@ export default function SetupWizardPage() {
                 </div>
               </div>
 
-              {/* Google rating (read-only) */}
-              {(info.rating > 0 || info.reviewCount > 0) && (
-                <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 grid grid-cols-3 gap-4">
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 mb-0.5">Google Rating</p>
-                    <p className="text-2xl font-bold text-amber-600">{info.rating.toFixed(1)}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 mb-0.5">Reviews</p>
-                    <p className="text-2xl font-bold text-slate-800">{info.reviewCount.toLocaleString()}</p>
-                  </div>
-                  <div>
-                    <p className="text-xs font-medium text-slate-500 mb-0.5">Last Synced</p>
-                    <p className="text-sm text-slate-600">
-                      {info.googleSyncedAt
-                        ? new Date(info.googleSyncedAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
-                        : '—'}
-                    </p>
-                  </div>
-                </div>
-              )}
             </div>
           )}
 

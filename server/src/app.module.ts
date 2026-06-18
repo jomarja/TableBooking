@@ -7,7 +7,6 @@ import { AuthModule } from './auth/auth.module';
 import { RestaurantsModule } from './restaurants/restaurants.module';
 import { ReservationsModule } from './reservations/reservations.module';
 import { BlockedModule } from './blocked/blocked.module';
-import { ImportModule } from './import/import.module';
 import { AdminModule } from './admin/admin.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { UploadModule } from './upload/upload.module';
@@ -25,7 +24,6 @@ import { UploadModule } from './upload/upload.module';
     RestaurantsModule,
     ReservationsModule,
     BlockedModule,
-    ImportModule,
     AdminModule,
     DashboardModule,
     UploadModule,

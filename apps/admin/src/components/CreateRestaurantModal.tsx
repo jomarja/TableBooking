@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FiX, FiDownloadCloud } from 'react-icons/fi';
+import { FiX } from 'react-icons/fi';
 import { api } from '../api/client';
 
 interface Props {
@@ -12,7 +12,6 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
     name: '',
     cuisine: 'georgian',
     address: '',
-    importUrl: '',
     ownerEmail: '',
     ownerName: '',
     ownerPassword: 'password',
@@ -51,14 +50,6 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
             Creates a restaurant in <strong>PENDING</strong> status plus a staff login. The owner
             completes setup on first login. Restaurants cannot self-register.
           </p>
-
-          <div className="bg-indigo-50 border border-indigo-100 rounded-lg p-3">
-            <label className="text-xs font-medium text-slate-600 mb-1 block">
-              <FiDownloadCloud className="inline mr-1" />
-              Google Maps URL (optional — prefills info on create)
-            </label>
-            <input className="tb-input" value={form.importUrl} onChange={(e) => set('importUrl', e.target.value)} placeholder="https://maps.google.com/…" />
-          </div>
 
           <div className="grid grid-cols-2 gap-3">
             <Field label="Restaurant name *"><input className="tb-input" value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>

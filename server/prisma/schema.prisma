@@ -72,11 +72,6 @@ enum NotificationStatus {
   SENT
 }
 
-enum ImportProvider {
-  GOOGLE_MAPS
-  MANUAL
-}
-
 model Restaurant {
   id            String           @id @default(cuid())
   name          String
@@ -98,7 +93,6 @@ model Restaurant {
   familyFriendly Boolean         @default(false)
   status        RestaurantStatus @default(PENDING)
   published     Boolean          @default(false)
-  importSource  ImportProvider   @default(MANUAL)
   // Config blobs (validated by DTOs)
   reservationRules             Json?
   reservationConfirmationPolicy Json?
@@ -109,7 +103,6 @@ model Restaurant {
   floorPlanBackground          String?
   description    String           @default("")
   reviewCount    Int              @default(0)
-  googleSyncedAt DateTime?
   restDays       String[]         @default([])
   cuisines       String[]         @default([])
   lat            Float?

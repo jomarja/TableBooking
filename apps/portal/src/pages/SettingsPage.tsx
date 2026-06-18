@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   FiSave,
-  FiRefreshCw,
   FiPlus,
   FiTrash2,
   FiEdit2,
@@ -50,12 +49,9 @@ export default function SettingsPage() {
     allowTableSelection: true,
     autoConfirm: true,
     published: false,
-    importUrl: '',
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [syncing, setSyncing] = useState(false);
-  const [syncNote, setSyncNote] = useState('');
 
   // Images
   const [images, setImages] = useState<RestaurantImage[]>([]);
@@ -87,7 +83,6 @@ export default function SettingsPage() {
       allowTableSelection: restaurant.allowTableSelection,
       autoConfirm: restaurant.reservationConfirmationPolicy?.autoConfirm !== false,
       published: restaurant.published,
-      importUrl: '',
     });
     setImages(restaurant.images || []);
     setMenu(restaurant.menu || []);
@@ -136,23 +131,6 @@ export default function SettingsPage() {
       setTimeout(() => setSaved(false), 3000);
     } finally {
       setSaving(false);
-    }
-  };
-
-  const runSync = async () => {
-    setSyncing(true);
-    setSyncNote('');
-    try {
-      const updated = await api.syncGoogle(restaurant.id, form.importUrl || undefined);
-      setForm((f) => ({
-        ...f,
-        website: (updated as any).website || f.website,
-        phone: (updated as any).phone || f.phone,
-      }));
-      setSyncNote('Synced! Rating and operational info updated from Google.');
-      await refresh();
-    } finally {
-      setSyncing(false);
     }
   };
 
@@ -248,58 +226,6 @@ export default function SettingsPage() {
       {/* ---- Profile Tab ---- */}
       {tab === 'profile' && (
         <div className="space-y-4">
-          {/* Google sync */}
-          <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <p className="text-sm font-semibold text-indigo-700">Sync with Google</p>
-              {restaurant.googleSyncedAt && (
-                <p className="text-xs text-slate-500">
-                  Last synced: {new Date(restaurant.googleSyncedAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })}
-                </p>
-              )}
-            </div>
-            <div className="flex gap-2">
-              <input
-                className="tb-input flex-1"
-                placeholder="Google Maps URL (optional)"
-                value={form.importUrl}
-                onChange={(e) => set('importUrl', e.target.value)}
-              />
-              <button
-                onClick={runSync}
-                disabled={syncing}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700 whitespace-nowrap disabled:opacity-60"
-              >
-                <FiRefreshCw size={14} className={syncing ? 'animate-spin' : ''} />
-                {syncing ? 'Syncing…' : 'Sync with Google'}
-              </button>
-            </div>
-            {syncNote && <p className="text-xs text-emerald-600">{syncNote}</p>}
-            <p className="text-xs text-slate-500">Syncs: rating, reviews, website, phone, opening hours, price info. Does not overwrite your description or photos.</p>
-          </div>
-
-          {/* Google rating (read-only) */}
-          {(restaurant.rating > 0 || restaurant.reviewCount > 0) && (
-            <div className="bg-amber-50 border border-amber-100 rounded-xl p-4 grid grid-cols-3 gap-4">
-              <div>
-                <p className="text-xs font-medium text-slate-500 mb-0.5">Google Rating</p>
-                <p className="text-2xl font-bold text-amber-600">{restaurant.rating.toFixed(1)}</p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-slate-500 mb-0.5">Reviews</p>
-                <p className="text-2xl font-bold text-slate-800">{(restaurant.reviewCount || 0).toLocaleString()}</p>
-              </div>
-              <div>
-                <p className="text-xs font-medium text-slate-500 mb-0.5">Last Synced</p>
-                <p className="text-sm text-slate-600">
-                  {restaurant.googleSyncedAt
-                    ? new Date(restaurant.googleSyncedAt).toLocaleString('en-GB', { dateStyle: 'short', timeStyle: 'short' })
-                    : '—'}
-                </p>
-              </div>
-            </div>
-          )}
-
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
             <h3 className="font-semibold text-slate-700">Basic Information</h3>
             <div className="grid grid-cols-2 gap-3">

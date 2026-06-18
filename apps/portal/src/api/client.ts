@@ -73,12 +73,6 @@ export const api = {
       body: JSON.stringify({ elements, background }),
     }),
 
-  importMaps: (url: string) =>
-    request<{ provider: string; data: Record<string, unknown> }>('/import', {
-      method: 'POST',
-      body: JSON.stringify({ url, provider: 'GOOGLE_MAPS' }),
-    }),
-
   uploadImage: async (file: File): Promise<string> => {
     const token = getToken();
     const formData = new FormData();
@@ -107,9 +101,6 @@ export const api = {
     request<Restaurant>(`/restaurants/${id}/menu/${itemId}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteMenuItem: (id: string, itemId: string) =>
     request<Restaurant>(`/restaurants/${id}/menu/${itemId}`, { method: 'DELETE' }),
-
-  syncGoogle: (id: string, importUrl?: string) =>
-    request<Restaurant>(`/restaurants/${id}/sync`, { method: 'POST', body: JSON.stringify({ importUrl }) }),
 
   listReservations: (date?: string) =>
     request<Reservation[]>(`/reservations${date ? `?date=${date}` : ''}`),

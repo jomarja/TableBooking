@@ -12,7 +12,6 @@ export interface AdminRestaurant {
   address: string;
   status: 'PENDING' | 'APPROVED' | 'DISABLED';
   published: boolean;
-  importSource: string;
   cover: string | null;
   staff: { id: string; email: string; name: string; firstLogin: boolean }[];
   reservationCount: number;
@@ -65,7 +64,6 @@ export const api = {
     name: string;
     cuisine?: string;
     address?: string;
-    importUrl?: string;
     ownerEmail: string;
     ownerName?: string;
     ownerPassword?: string;
@@ -77,10 +75,6 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ password }),
     }),
-  syncRestaurant: (id: string) =>
-    request<{ ok: boolean }>(`/admin/restaurants/${id}/sync`, { method: 'POST' }),
-  syncAll: () =>
-    request<{ ok: boolean; count: number }>('/admin/restaurants/sync-all', { method: 'POST' }),
   stats: () => request<AdminStats>('/admin/stats'),
 };
 

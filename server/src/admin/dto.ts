@@ -6,7 +6,6 @@ export class CreateRestaurantDto {
   @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() website?: string;
   @IsOptional() @IsString() phone?: string;
-  @IsOptional() @IsString() importUrl?: string;
   @IsEmail() ownerEmail!: string;
   @IsOptional() @IsString() ownerName?: string;
   @IsOptional() @IsString() ownerPassword?: string;

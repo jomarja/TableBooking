@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw } from 'react-icons/fi';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw, FiEdit2, FiUserCheck, FiCheckCircle, FiXCircle, FiClock } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod, Reservation, Restaurant, TableModel } from '../types';
@@ -15,6 +15,8 @@ const DEFAULT_PX_PER_HOUR = 90;
 const MIN_PX_PER_HOUR = 44;
 const MAX_PX_PER_HOUR = 220;
 const ROW_H = 64;
+const ZONE_H = 40; // approx zone-header strip height (used only for row virtualization math)
+const ROW_OVERSCAN = 400; // px rendered beyond the viewport so fast scroll never shows blanks
 const MIN_PER_DAY = 24 * 60;
 const AUTOSCROLL_EDGE = 56; // px from top/bottom edge that triggers auto-scroll while dragging
 const AUTOSCROLL_MAX = 20; // max auto-scroll speed in px per frame
@@ -30,6 +32,14 @@ function minToLabel(min: number) {
   const h = Math.floor(min / 60) % 24;
   const m = min % 60;
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+// Human duration like "2h 30m" / "90m" → used in the live drag/resize preview.
+function fmtDuration(min: number) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
 }
 function addDays(date: string, n: number) {
   const d = new Date(date);
@@ -79,29 +89,25 @@ function resEpochRange(r: Reservation) {
 
 type ResVisual = 'pending' | 'confirmed' | 'seated' | 'completed' | 'cancelled';
 
-// Colour is driven purely by status so the lifecycle is always readable:
-// pending (awaiting confirmation — shows the bell) → confirmed → seated →
-// completed. COMPLETED stays gray regardless of time or being moved, and
-// cancelled is the muted struck-through state.
-function reservationVisual(r: Reservation): ResVisual {
-  switch (r.status) {
-    case 'CANCELLED':
-      return 'cancelled';
-    case 'COMPLETED':
-      return 'completed';
-    case 'SEATED':
-      return 'seated';
-    case 'PENDING':
-      return 'pending';
-    default:
-      return 'confirmed';
-  }
+// Colour driven by status, with one time-based rule: a booking whose end time
+// has already passed renders as COMPLETED (gray, reduced emphasis) regardless
+// of its stored status, so the past reads as "done" at a glance. Cancelled is
+// always the muted struck-through state.
+function reservationVisual(r: Reservation, nowMs?: number): ResVisual {
+  if (r.status === 'CANCELLED') return 'cancelled';
+  if (r.status === 'COMPLETED') return 'completed';
+  if (nowMs !== undefined && nowMs >= resEpochRange(r).end) return 'completed';
+  if (r.status === 'SEATED') return 'seated';
+  if (r.status === 'PENDING') return 'pending';
+  return 'confirmed';
 }
 
-// Tailwind classes per visual state (block background + text).
+// Tailwind classes per visual state (block background + text). Per the status
+// palette: pending=orange, confirmed=brand indigo/purple, seated=yellow,
+// completed/cancelled=gray (cancelled struck through).
 const VISUAL_CLASS: Record<ResVisual, string> = {
-  pending: 'bg-blue-500 hover:bg-blue-600 text-white',
-  confirmed: 'bg-indigo-500 hover:bg-indigo-600 text-white',
+  pending: 'bg-orange-500 hover:bg-orange-600 text-white',
+  confirmed: 'bg-indigo-600 hover:bg-indigo-700 text-white',
   seated: 'bg-amber-400 hover:bg-amber-500 text-amber-950',
   completed: 'bg-slate-400 hover:bg-slate-500 text-white',
   cancelled: 'bg-slate-300 text-slate-600 line-through',
@@ -109,8 +115,8 @@ const VISUAL_CLASS: Record<ResVisual, string> = {
 
 // Matching dot colour for the day-list rows.
 const VISUAL_DOT: Record<ResVisual, string> = {
-  pending: 'bg-blue-500',
-  confirmed: 'bg-indigo-500',
+  pending: 'bg-orange-500',
+  confirmed: 'bg-indigo-600',
   seated: 'bg-amber-400',
   completed: 'bg-slate-400',
   cancelled: 'bg-slate-300',
@@ -128,6 +134,16 @@ export default function ReservationsPage() {
   const [creating, setCreating] = useState<
     boolean | { tableId: string; startTime: string; date: string }
   >(false);
+  // Scheduler setting: show the current-time indicator (default ON, persisted).
+  const [showNowLine, setShowNowLine] = useState(
+    () => localStorage.getItem('tb_showNowLine') !== '0',
+  );
+  const toggleNowLine = useCallback(() => {
+    setShowNowLine((v) => {
+      localStorage.setItem('tb_showNowLine', v ? '0' : '1');
+      return !v;
+    });
+  }, []);
   const now = useNow();
 
   // The timeline spans WINDOW_DAYS consecutive days laid out on one continuous
@@ -288,6 +304,19 @@ export default function ReservationsPage() {
             ))}
           </div>
           <button
+            onClick={toggleNowLine}
+            role="switch"
+            aria-checked={showNowLine}
+            className={`p-2 rounded-lg border transition-colors ${
+              showNowLine
+                ? 'border-red-200 bg-red-50 text-red-500'
+                : 'border-slate-200 text-slate-400 hover:bg-white'
+            }`}
+            title={`${showNowLine ? 'Hide' : 'Show'} current-time indicator`}
+          >
+            <FiClock size={16} />
+          </button>
+          <button
             onClick={() => void load()}
             disabled={loading}
             className="p-2 rounded-lg border border-slate-200 text-slate-500 hover:bg-white disabled:opacity-50"
@@ -319,10 +348,13 @@ export default function ReservationsPage() {
           dayIndexOf={dayIndexOf}
           blocksForTable={blocksForTable}
           zoneName={zoneName}
+          showNow={showNowLine}
           onEdit={setEditing}
           onChanged={onSaved}
           onConfirm={(r) => setStatus(r, 'CONFIRMED')}
           onArrive={(r) => setStatus(r, 'SEATED')}
+          onComplete={(r) => setStatus(r, 'COMPLETED')}
+          onCancel={(r) => setStatus(r, 'CANCELLED')}
           onCreateAt={(tableId, dayDate, startMin) => {
             setCreating({ tableId, date: dayDate, startTime: minToLabel(startMin) });
           }}
@@ -381,10 +413,13 @@ function TableScheduler({
   dayIndexOf,
   blocksForTable,
   zoneName,
+  showNow,
   onEdit,
   onChanged,
   onConfirm,
   onArrive,
+  onComplete,
+  onCancel,
   onCreateAt,
 }: {
   tables: TableModel[];
@@ -393,16 +428,68 @@ function TableScheduler({
   dayIndexOf: (date: string) => number;
   blocksForTable: (id: string, date: string) => BlockedPeriod[];
   zoneName: (id: string | null) => string;
+  showNow: boolean;
   onEdit: (r: Reservation) => void;
   onChanged: (notify: boolean, id?: string) => void;
   onConfirm: (r: Reservation) => void;
   onArrive: (r: Reservation) => void;
+  onComplete: (r: Reservation) => void;
+  onCancel: (r: Reservation) => void;
   onCreateAt: (tableId: string, date: string, startMin: number) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pxPerHour, setPxPerHour] = useState(DEFAULT_PX_PER_HOUR);
   const maxAbs = WINDOW_DAYS * MIN_PER_DAY; // exclusive upper bound for positions
   const now = useNow();
+
+  // Zoom that keeps the viewport centre fixed (no jump). We mirror pxPerHour in
+  // a ref so the wheel/buttons can read the live value, and stash the target
+  // scrollLeft to apply *after* the new width lands (layout effect below).
+  const pxPerHourRef = useRef(pxPerHour);
+  pxPerHourRef.current = pxPerHour;
+  const pendingScrollLeftRef = useRef<number | null>(null);
+  const applyZoom = useCallback((next: number) => {
+    const el = scrollRef.current;
+    const prev = pxPerHourRef.current;
+    const clamped = Math.min(MAX_PX_PER_HOUR, Math.max(MIN_PX_PER_HOUR, next));
+    if (clamped === prev) return;
+    if (el) {
+      // Axis-x under the viewport centre stays put: newScrollLeft keeps the
+      // same content point centred after the scale changes by clamped/prev.
+      const a = el.scrollLeft + el.clientWidth / 2 - LABEL_W;
+      pendingScrollLeftRef.current = LABEL_W + a * (clamped / prev) - el.clientWidth / 2;
+    }
+    setPxPerHour(clamped);
+  }, []);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (el && pendingScrollLeftRef.current != null) {
+      el.scrollLeft = Math.max(0, pendingScrollLeftRef.current);
+      pendingScrollLeftRef.current = null;
+    }
+  }, [pxPerHour]);
+
+  // Row virtualization: track vertical scroll + viewport height so off-screen
+  // table rows can skip rendering their (heavy) gridlines/blocks. rAF-throttled
+  // so scrolling/panning many tables stays smooth.
+  const [vScroll, setVScroll] = useState(0);
+  const [viewH, setViewH] = useState(0);
+  const scrollRafRef = useRef<number | null>(null);
+  const onSchedScroll = useCallback(() => {
+    if (scrollRafRef.current != null) return;
+    scrollRafRef.current = requestAnimationFrame(() => {
+      scrollRafRef.current = null;
+      const el = scrollRef.current;
+      if (el) {
+        setVScroll(el.scrollTop);
+        setViewH(el.clientHeight);
+      }
+    });
+  }, []);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) setViewH(el.clientHeight);
+  }, []);
 
   // "Now" as an absolute axis-minute, if today falls inside the window.
   const nowAbs = useMemo(() => {
@@ -456,17 +543,25 @@ function TableScheduler({
     [days, rangeStart, rangeEnd],
   );
 
-  // drag state — kept in a ref so pointermove/pointerup handlers are stable
+  // drag state — kept in a ref so pointermove/pointerup handlers are stable.
+  // `edge` distinguishes which side a resize grabs (left = start, right = end).
   const dragRef = useRef<{
     id: string;
     mode: 'move' | 'resize';
+    edge?: 'start' | 'end';
     startX: number;
     origStart: number;
     origEnd: number;
     origTableId: string | null;
   } | null>(null);
-  // pan state — drag the empty timeline background to scroll horizontally
-  const panRef = useRef<{ startX: number; scrollLeft: number } | null>(null);
+  // pan state — drag the empty background to scroll the timeline in 2D
+  // (left/right + up/down), Figma/Miro style.
+  const panRef = useRef<{
+    startX: number;
+    startY: number;
+    scrollLeft: number;
+    scrollTop: number;
+  } | null>(null);
   // edge auto-scroll while dragging a reservation up/down: keeps scrolling the
   // rows while the pointer rests near the top/bottom edge, so off-screen tables
   // can be reached without releasing to use the scrollbar (mirrors left/right).
@@ -483,12 +578,17 @@ function TableScheduler({
     start: number;
     end: number;
     tableId: string | null;
+    valid: boolean; // false when the current spot overlaps another booking
   } | null>(null);
+  // Right-click context menu (quick actions) anchored at the cursor.
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; res: Reservation } | null>(null);
 
-  // All tick positions across the visible range: whole hours + half hours
+  // All tick positions across the visible range: whole hours + half hours.
+  // Stop *before* rangeEnd so there's no dangling "00:00" tick/label hanging
+  // past the last real slot (the stray empty column at the right edge).
   const ticks = useMemo(() => {
     const t: { min: number; isHour: boolean }[] = [];
-    for (let m = rangeStart; m <= rangeEnd; m += 30) {
+    for (let m = rangeStart; m < rangeEnd; m += 30) {
       t.push({ min: m, isHour: m % 60 === 0 });
     }
     return t;
@@ -503,6 +603,20 @@ function TableScheduler({
     }
     return Array.from(map.entries());
   }, [tables, zoneName]);
+
+  // Approx vertical offset of each table row (for virtualization visibility).
+  const rowTops = useMemo(() => {
+    const m = new Map<string, number>();
+    let top = 0;
+    for (const [, zoneTables] of grouped) {
+      top += ZONE_H;
+      for (const t of zoneTables) {
+        m.set(t.id, top);
+        top += ROW_H;
+      }
+    }
+    return m;
+  }, [grouped]);
 
   const minToX = useCallback(
     (min: number) => ((min - rangeStart) / 60) * pxPerHour,
@@ -544,18 +658,72 @@ function TableScheduler({
     [preview, overrides],
   );
 
-  // Ctrl+wheel to zoom — one notch ≈ 8 px/hr, normalised for trackpads
+  // ---- Collision helpers ----
+  // Occupied intervals (abs minutes) from *other* non-cancelled reservations on
+  // a table, using their effective (post-drop override) positions. Cancelled
+  // bookings never block — they're excluded.
+  const occupiedOn = useCallback(
+    (tableId: string | null, excludeId: string) => {
+      const list: { start: number; end: number }[] = [];
+      for (const r of reservations) {
+        if (r.id === excludeId || r.status === 'CANCELLED') continue;
+        const tid = overrides[r.id]?.tableId ?? r.tableId;
+        if (tid !== tableId) continue;
+        const o = overrides[r.id];
+        list.push(o ? { start: o.start, end: o.end } : resAbs(r));
+      }
+      return list.sort((a, b) => a.start - b.start);
+    },
+    [reservations, overrides, resAbs],
+  );
+
+  const overlapsAny = (start: number, end: number, occ: { start: number; end: number }[]) =>
+    occ.some((o) => start < o.end && end > o.start);
+
+  // Nearest valid start for a block of length `dur` on `tableId`, snapping it
+  // before/after existing bookings (whichever gap is closest). null = no room.
+  const resolvePlacement = useCallback(
+    (tableId: string | null, desiredStart: number, dur: number, excludeId: string) => {
+      const lo = rangeStart;
+      const hi = Math.min(rangeEnd, maxAbs);
+      const occ = occupiedOn(tableId, excludeId);
+      // Free gaps within [lo, hi].
+      const gaps: { start: number; end: number }[] = [];
+      let cursor = lo;
+      for (const o of occ) {
+        if (o.start > cursor) gaps.push({ start: cursor, end: Math.min(o.start, hi) });
+        cursor = Math.max(cursor, o.end);
+        if (cursor >= hi) break;
+      }
+      if (cursor < hi) gaps.push({ start: cursor, end: hi });
+      const feasible = gaps.filter((g) => g.end - g.start >= dur);
+      if (!feasible.length) return null;
+      let best: number | null = null;
+      let bestDist = Infinity;
+      for (const g of feasible) {
+        const clamped = Math.max(g.start, Math.min(desiredStart, g.end - dur));
+        const dist = Math.abs(clamped - desiredStart);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = clamped;
+        }
+      }
+      return best;
+    },
+    [occupiedOn, rangeStart, rangeEnd, maxAbs],
+  );
+
+  // Ctrl+wheel to zoom — one notch ≈ 8 px/hr, normalised for trackpads.
+  // Routes through applyZoom so the viewport centre stays put.
   const onWheel = useCallback((e: WheelEvent) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    setPxPerHour((prev) => {
-      // deltaY can be pixels (trackpad) or lines (mouse wheel).
-      // Cap the per-event change to ±8 so trackpad swipes feel smooth.
-      const raw = e.deltaMode === 0 ? e.deltaY * 0.15 : e.deltaY * 8;
-      const delta = Math.sign(raw) * Math.min(Math.abs(raw), 8);
-      return Math.min(MAX_PX_PER_HOUR, Math.max(MIN_PX_PER_HOUR, prev - delta));
-    });
-  }, []);
+    // deltaY can be pixels (trackpad) or lines (mouse wheel).
+    // Cap the per-event change to ±8 so trackpad swipes feel smooth.
+    const raw = e.deltaMode === 0 ? e.deltaY * 0.15 : e.deltaY * 8;
+    const delta = Math.sign(raw) * Math.min(Math.abs(raw), 8);
+    applyZoom(pxPerHourRef.current - delta);
+  }, [applyZoom]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -578,10 +746,12 @@ function TableScheduler({
       // Follow the cursor freely (no snapping mid-drag) so the block tracks the
       // pointer 1:1 — snapping is applied once, on drop. This removes the
       // back-and-forth jitter near 15-minute boundaries.
+      const hi = Math.min(rangeEnd, maxAbs);
+      let valid = true;
       if (drag.mode === 'move') {
         const dur = drag.origEnd - drag.origStart;
         start = drag.origStart + deltaMin;
-        start = Math.max(rangeStart, Math.min(start, Math.min(rangeEnd, maxAbs) - dur));
+        start = Math.max(rangeStart, Math.min(start, hi - dur));
         end = start + dur;
         // Vertical move: retarget to the nearest table row by cursor-Y. Using
         // the row whose vertical band contains (or is closest to) the cursor —
@@ -607,14 +777,34 @@ function TableScheduler({
           });
           if (bestId) tableId = bestId;
         }
+        // Validity = does this exact spot overlap another booking? (We snap to a
+        // clear slot on drop; the live red/green just tells the user.)
+        valid = !overlapsAny(snap(start), snap(end), occupiedOn(tableId, drag.id));
       } else {
-        start = drag.origStart;
-        end = drag.origEnd + deltaMin;
-        end = Math.max(start + 15, Math.min(end, Math.min(rangeEnd, maxAbs)));
+        // Resize: keep the opposite edge fixed and clamp the dragged edge so it
+        // can't grow into a neighbouring booking (snaps flush against it).
+        const occ = occupiedOn(tableId, drag.id);
+        if (drag.edge === 'start') {
+          const prevEnd = Math.max(
+            rangeStart,
+            ...occ.filter((o) => o.start < drag.origEnd && o.end <= drag.origEnd).map((o) => o.end),
+          );
+          start = drag.origStart + deltaMin;
+          start = Math.max(prevEnd, Math.min(start, drag.origEnd - 15));
+          end = drag.origEnd;
+        } else {
+          const nextStart = Math.min(
+            hi,
+            ...occ.filter((o) => o.end > drag.origStart && o.start >= drag.origStart).map((o) => o.start),
+          );
+          start = drag.origStart;
+          end = drag.origEnd + deltaMin;
+          end = Math.max(start + 15, Math.min(end, nextStart));
+        }
       }
-      setPreview({ id: drag.id, mode: drag.mode, start, end, tableId });
+      setPreview({ id: drag.id, mode: drag.mode, start, end, tableId, valid });
     },
-    [pxPerHour, rangeStart, rangeEnd, maxAbs],
+    [pxPerHour, rangeStart, rangeEnd, maxAbs, occupiedOn],
   );
 
   // The auto-scroll loop must always call the freshest computePreview (which
@@ -672,12 +862,25 @@ function TableScheduler({
     rafRef.current = requestAnimationFrame(dragTick);
   }, []);
 
+  // Start a 2D pan from the current pointer + scroll position.
+  const beginPan = useCallback((clientX: number, clientY: number) => {
+    if (!scrollRef.current) return;
+    panRef.current = {
+      startX: clientX,
+      startY: clientY,
+      scrollLeft: scrollRef.current.scrollLeft,
+      scrollTop: scrollRef.current.scrollTop,
+    };
+  }, []);
+
   const onPointerMove = useCallback(
     (e: PointerEvent) => {
-      // Panning the background: scroll the container opposite the drag.
+      // Panning the background: scroll the container opposite the drag, in 2D.
       if (panRef.current && scrollRef.current) {
         scrollRef.current.scrollLeft =
           panRef.current.scrollLeft - (e.clientX - panRef.current.startX);
+        scrollRef.current.scrollTop =
+          panRef.current.scrollTop - (e.clientY - panRef.current.startY);
         return;
       }
       const drag = dragRef.current;
@@ -710,15 +913,28 @@ function TableScheduler({
       if (!prev || prev.id !== drag.id) return null;
       const res = reservations.find((r) => r.id === drag.id);
       if (!res) return null;
-      // Snap to the 15-minute grid now, on release (kept free during the drag).
+      // Snap to the 15-minute grid now, on release (kept free during the drag),
+      // and resolve any overlap so the result is always collision-free.
+      const hi = Math.min(rangeEnd, maxAbs);
       let snapStart: number, snapEnd: number;
       if (prev.mode === 'move') {
         const dur = prev.end - prev.start;
-        snapStart = Math.max(rangeStart, Math.min(snap(prev.start), Math.min(rangeEnd, maxAbs) - dur));
+        const desired = Math.max(rangeStart, Math.min(snap(prev.start), hi - dur));
+        const resolved = resolvePlacement(prev.tableId, desired, dur, drag.id);
+        if (resolved == null) return null; // table is full → cancel the move
+        snapStart = resolved;
         snapEnd = snapStart + dur;
       } else {
-        snapStart = prev.start;
-        snapEnd = Math.max(snapStart + 15, Math.min(snap(prev.end), Math.min(rangeEnd, maxAbs)));
+        const occ = occupiedOn(prev.tableId, drag.id);
+        if (drag.edge === 'start') {
+          const prevEnd = Math.max(rangeStart, ...occ.filter((o) => o.end <= prev.end).map((o) => o.end));
+          snapEnd = prev.end;
+          snapStart = Math.min(snapEnd - 15, Math.max(prevEnd, snap(prev.start)));
+        } else {
+          const nextStart = Math.min(hi, ...occ.filter((o) => o.start >= prev.start).map((o) => o.start));
+          snapStart = prev.start;
+          snapEnd = Math.max(snapStart + 15, Math.min(nextStart, snap(prev.end)));
+        }
       }
       const { date: newDate, baseAbs } = absToParts(snapStart);
       const newStart = minToLabel(snapStart - baseAbs);
@@ -764,7 +980,7 @@ function TableScheduler({
         });
       return null;
     });
-  }, [reservations, onChanged, absToParts, rangeStart, rangeEnd, maxAbs]);
+  }, [reservations, onChanged, absToParts, rangeStart, rangeEnd, maxAbs, resolvePlacement, occupiedOn]);
 
   useEffect(() => {
     window.addEventListener('pointermove', onPointerMove);
@@ -779,15 +995,26 @@ function TableScheduler({
   const showHalfLabels = pxPerHour >= 70;
 
   return (
+    <>
     <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
       <div
         ref={scrollRef}
         className="tb-scroll select-none"
         style={{ overflow: 'auto', maxHeight: 'calc(100vh - 14rem)' }}
+        onScroll={onSchedScroll}
+        onPointerDown={(e) => {
+          // Middle-mouse drag pans from anywhere (Figma/Miro style); trackpad
+          // and touch already pan natively via the scroll container.
+          if (e.button === 1) {
+            e.preventDefault();
+            beginPan(e.clientX, e.clientY);
+          }
+        }}
       >
-        {/* minWidth (not width) so the grid fills a wider viewport via the
-            flex spacers below, and scrolls when the viewport is narrower. */}
-        <div style={{ minWidth: width + LABEL_W }}>
+        {/* Exact content width: the grid ends precisely at the last slot so no
+            empty filler column appears after it. On wider viewports the area to
+            the right is just the (white) card background — continuous, no gap. */}
+        <div style={{ width: width + LABEL_W }}>
           {/* Header row: table label column + time axis */}
           <div className="flex sticky top-0 z-20 select-none" style={{ background: '#f8fafc' }}>
             {/* Table column header — holds the zoom controls. Sticky on the X
@@ -799,7 +1026,7 @@ function TableScheduler({
               </div>
               <div className="flex items-center gap-1 mt-1">
                 <button
-                  onClick={() => setPxPerHour((p) => Math.max(MIN_PX_PER_HOUR, p - 16))}
+                  onClick={() => applyZoom(pxPerHour - 16)}
                   disabled={pxPerHour <= MIN_PX_PER_HOUR}
                   className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 text-base font-medium flex items-center justify-center leading-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   title="Zoom out"
@@ -812,14 +1039,14 @@ function TableScheduler({
                   />
                 </div>
                 <button
-                  onClick={() => setPxPerHour((p) => Math.min(MAX_PX_PER_HOUR, p + 16))}
+                  onClick={() => applyZoom(pxPerHour + 16)}
                   disabled={pxPerHour >= MAX_PX_PER_HOUR}
                   className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 text-base font-medium flex items-center justify-center leading-none transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   title="Zoom in"
                   aria-label="Zoom in"
                 >+</button>
                 <button
-                  onClick={() => setPxPerHour(DEFAULT_PX_PER_HOUR)}
+                  onClick={() => applyZoom(DEFAULT_PX_PER_HOUR)}
                   disabled={pxPerHour === DEFAULT_PX_PER_HOUR}
                   className="w-6 h-6 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                   title="Reset zoom"
@@ -844,12 +1071,13 @@ function TableScheduler({
                   style={{ width: minToX(Math.min(nowAbs, rangeEnd)) }}
                 />
               )}
-              {/* current-time marker with a time pill. The sticky label-column
-                  header (z-20) is opaque and clips this (z-10) at the edge. */}
-              {nowAbs !== null && nowAbs >= rangeStart && nowAbs <= rangeEnd && (
+              {/* current-time marker + time pill. The sticky label-column header
+                  (z-20) is opaque and clips this (z-10) at the edge. The pill sits
+                  to the *right* of the line so it's never tucked under the column. */}
+              {showNow && nowAbs !== null && nowAbs >= rangeStart && nowAbs <= rangeEnd && (
                 <div className="absolute top-0 bottom-0 z-10 pointer-events-none" style={{ left: minToX(nowAbs) }}>
-                  <div className="absolute inset-y-0 left-0 w-0.5 bg-red-500" />
-                  <span className="absolute bottom-0.5 left-0 -translate-x-1/2 bg-red-500 text-white text-[10px] font-semibold px-1 py-0.5 rounded whitespace-nowrap">
+                  <div className="absolute inset-y-0 left-0 w-0.5 bg-red-500/70" />
+                  <span className="absolute bottom-0.5 left-1 bg-red-500 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded shadow-sm whitespace-nowrap">
                     {minToLabel(nowAbs % MIN_PER_DAY)}
                   </span>
                 </div>
@@ -896,8 +1124,6 @@ function TableScheduler({
               {/* spacer so the header has height for the day chip + hour labels */}
               <div className="invisible py-5 text-xs">00:00</div>
             </div>
-            {/* fills any leftover width on wide screens (out-of-range = closed) */}
-            <div className="flex-1 border-b border-slate-200 bg-slate-100" />
           </div>
 
           {/* Body — relative so the now-line can span every row as one
@@ -907,36 +1133,54 @@ function TableScheduler({
           {/* Rows grouped by zone */}
           {grouped.map(([zone, zoneTables]) => (
             <div key={zone}>
+              {/* relative z-10 lifts the whole strip ABOVE the now-line (z-5) so
+                  the line passes *behind* the zone header; the translucent bg
+                  lets it show through only faintly (reduced opacity). */}
               <div
-                className="py-1 bg-slate-100 text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-grab active:cursor-grabbing"
+                className="relative z-10 py-1 bg-slate-100/80 text-xs font-semibold text-slate-500 uppercase tracking-wide cursor-grab active:cursor-grabbing"
                 onPointerDown={(e) => {
-                  // Let the zone strip be a pan handle too.
-                  if (!scrollRef.current) return;
-                  panRef.current = { startX: e.clientX, scrollLeft: scrollRef.current.scrollLeft };
+                  // Mouse left-drag pans here; touch/trackpad pan natively.
+                  if (e.pointerType !== 'mouse' || e.button !== 0) return;
+                  beginPan(e.clientX, e.clientY);
                 }}
               >
-                {/* sticky so the zone name stays visible while scrolling right;
-                    opaque + relative z-10 so it clips the now-line at the edge */}
-                <span className="sticky left-0 z-10 inline-block px-3 bg-slate-100">{zone}</span>
+                {/* full-width (LABEL_W) opaque sticky cover over the label column
+                    so the now-line is never visible inside it on zone rows; z-20
+                    sits above the line and the translucent strip. */}
+                <span className="sticky left-0 z-20 block w-40 px-3 bg-slate-100">{zone}</span>
               </div>
               {zoneTables.map((t) => {
                 const rows = reservations.filter((r) => effectiveTableId(r) === t.id);
                 // While moving a reservation, light up the row under the cursor
-                // (and only when it's actually a different table — no glow on the
-                // row you started from until you leave it).
+                // in green (valid drop) or red (would overlap — gets snapped clear
+                // on release). No glow on rows you're not hovering.
                 const isDropTarget = preview?.mode === 'move' && preview.tableId === t.id;
+                const dropOk = isDropTarget && preview!.valid;
+                // Virtualization: only render this row's heavy timeline contents
+                // when it's within (or near) the viewport. The row box itself
+                // always renders so layout/scroll height/drag-targeting are intact.
+                const rowTop = rowTops.get(t.id) ?? 0;
+                const rowVisible =
+                  viewH === 0 ||
+                  (rowTop + ROW_H > vScroll - ROW_OVERSCAN && rowTop < vScroll + viewH + ROW_OVERSCAN);
                 return (
                   <div
                     key={t.id}
                     className={`flex border-b transition-colors ${
                       isDropTarget
-                        ? 'border-indigo-300 bg-indigo-50/60'
+                        ? dropOk
+                          ? 'border-emerald-300 bg-emerald-50/60'
+                          : 'border-red-300 bg-red-50/60'
                         : 'border-slate-100 hover:bg-slate-50/40'
                     }`}
                   >
                     <div
                       className={`w-40 flex-shrink-0 sticky left-0 z-10 px-3 py-3 text-sm border-r transition-colors ${
-                        isDropTarget ? 'bg-indigo-50 border-indigo-200' : 'bg-white border-slate-100'
+                        isDropTarget
+                          ? dropOk
+                            ? 'bg-emerald-50 border-emerald-200'
+                            : 'bg-red-50 border-red-200'
+                          : 'bg-white border-slate-100'
                       }`}
                     >
                       <span className="font-medium text-slate-700">Table {t.number}</span>
@@ -945,15 +1189,20 @@ function TableScheduler({
                     <div
                       data-table-id={t.id}
                       className={`relative flex-shrink-0 transition-colors cursor-grab active:cursor-grabbing ${
-                        isDropTarget ? 'bg-indigo-50/60 ring-2 ring-inset ring-indigo-300' : 'bg-slate-50'
+                        isDropTarget
+                          ? dropOk
+                            ? 'bg-emerald-50/60 ring-2 ring-inset ring-emerald-300'
+                            : 'bg-red-50/60 ring-2 ring-inset ring-red-300'
+                          : 'bg-slate-50'
                       }`}
                       style={{ width, height: ROW_H }}
                       onPointerDown={(e) => {
-                        // Press-drag on empty space pans the timeline; presses on
-                        // a reservation are handled by the block itself.
+                        // Mouse left-drag on empty space pans the timeline (2D);
+                        // touch/trackpad pan natively; reservation presses are
+                        // handled by the block itself.
                         if ((e.target as HTMLElement).closest('[data-reservation]')) return;
-                        if (!scrollRef.current) return;
-                        panRef.current = { startX: e.clientX, scrollLeft: scrollRef.current.scrollLeft };
+                        if (e.pointerType !== 'mouse' || e.button !== 0) return;
+                        beginPan(e.clientX, e.clientY);
                       }}
                       onDoubleClick={(e) => {
                         // Ignore double-clicks that land on an existing block.
@@ -967,6 +1216,8 @@ function TableScheduler({
                       }}
                       title="Double-click an empty slot to add a reservation"
                     >
+                      {rowVisible && (
+                      <>
                       {/* white open-hours bands over the gray (closed) base */}
                       {openBands.map((b) => (
                         <div
@@ -977,9 +1228,14 @@ function TableScheduler({
                       ))}
                       {/* drop-target tint — drawn AFTER the white bands so the
                           move-highlight is visible across white open hours too,
-                          not just the gray/closed areas */}
+                          not just the gray/closed areas. Green = valid, red =
+                          would overlap. */}
                       {isDropTarget && (
-                        <div className="absolute inset-0 bg-indigo-300/30 pointer-events-none" />
+                        <div
+                          className={`absolute inset-0 pointer-events-none ${
+                            dropOk ? 'bg-emerald-300/30' : 'bg-red-300/30'
+                          }`}
+                        />
                       )}
                       {/* dim the elapsed part of the day (past = subtly gray) */}
                       {nowAbs !== null && nowAbs > rangeStart && (
@@ -1038,7 +1294,8 @@ function TableScheduler({
                         const x = minToX(start);
                         const w = minToX(end) - x;
                         const isDragging = preview?.id === r.id || !!overrides[r.id];
-                        const visual = reservationVisual(r);
+                        const isPast = now >= resEpochRange(r).end;
+                        const visual = reservationVisual(r, now);
                         const wide = Math.max(w, 36);
                         // Bell (confirm) shows while a booking is PENDING — e.g.
                         // right after it's moved — and clears it to CONFIRMED.
@@ -1054,6 +1311,7 @@ function TableScheduler({
                             key={r.id}
                             data-reservation
                             onPointerDown={(e) => {
+                              if (e.button !== 0) return; // left-button only; right opens the menu
                               e.preventDefault();
                               dragRef.current = {
                                 id: r.id,
@@ -1065,17 +1323,26 @@ function TableScheduler({
                               };
                             }}
                             onClick={() => !dragRef.current && !overrides[r.id] && onEdit(r)}
-                            className={`absolute rounded-md px-2 py-1 text-xs cursor-grab active:cursor-grabbing overflow-hidden shadow-sm select-none ${
-                              isDragging
-                                ? 'shadow-xl ring-2 ring-indigo-300 z-20 ' + VISUAL_CLASS[visual]
-                                : 'transition-shadow ' + VISUAL_CLASS[visual]
+                            onContextMenu={(e) => {
+                              e.preventDefault();
+                              setCtxMenu({ x: e.clientX, y: e.clientY, res: r });
+                            }}
+                            className={`absolute rounded-md px-2 py-1 text-xs cursor-grab active:cursor-grabbing overflow-hidden select-none transition-[box-shadow,opacity] duration-150 ${VISUAL_CLASS[visual]} ${
+                              isActive
+                                ? `shadow-xl z-20 opacity-90 ring-2 ${preview!.valid ? 'ring-emerald-400' : 'ring-red-500'}`
+                                : isDragging
+                                  ? 'shadow-xl ring-2 ring-indigo-300 z-20'
+                                  : isPast
+                                    ? 'shadow-sm opacity-80 hover:opacity-100 hover:shadow-lg'
+                                    : 'shadow-sm hover:shadow-lg'
                             }`}
                             style={{
                               // Position via transform (not `left`) so moving the
                               // block during a drag is a compositor-only change —
-                              // no per-frame layout — which keeps it smooth.
+                              // no per-frame layout — which keeps it smooth. While
+                              // actively dragging it lifts slightly (scale 1.02).
                               left: 0,
-                              transform: `translateX(${x}px)`,
+                              transform: `translateX(${x}px)${isActive ? ' scale(1.02)' : ''}`,
                               willChange: isDragging ? 'transform' : undefined,
                               width: wide,
                               top: 4,
@@ -1093,8 +1360,11 @@ function TableScheduler({
                             </span>
                             <span className="opacity-80 leading-tight block text-[10px]">
                               {/* snap the readout to 15-min steps so dragging shows
-                                  clean times (…:00/:15/:30/:45), not raw minutes */}
-                              {minToLabel(snap(start) % MIN_PER_DAY)}–{minToLabel(snap(end) % MIN_PER_DAY)} · {r.guests}p
+                                  clean times (…:00/:15/:30/:45), not raw minutes.
+                                  While dragging/resizing, show the live duration. */}
+                              {minToLabel(snap(start) % MIN_PER_DAY)}–{minToLabel(snap(end) % MIN_PER_DAY)}
+                              {' · '}
+                              {isDragging ? fmtDuration(snap(end) - snap(start)) : `${r.guests}p`}
                             </span>
                             {/* arrival tick — appears at the booking's start time;
                                 press to mark the guest as arrived (seated/yellow) */}
@@ -1126,42 +1396,70 @@ function TableScheduler({
                                 <FiBell size={12} />
                               </button>
                             )}
-                            {/* resize handle — wider, more visible */}
-                            <span
-                              onPointerDown={(e) => {
-                                e.stopPropagation();
-                                e.preventDefault();
-                                dragRef.current = {
-                                  id: r.id,
-                                  mode: 'resize',
-                                  startX: e.clientX,
-                                  origStart: abs.start,
-                                  origEnd: abs.end,
-                                  origTableId: r.tableId,
-                                };
-                              }}
-                              className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center"
-                              style={{ touchAction: 'none' }}
-                            >
-                              <span className="w-0.5 h-4 bg-current opacity-40 rounded-full" />
-                            </span>
+                            {/* resize handles — both edges (left = start, right
+                                = end). Hidden on cancelled bookings. */}
+                            {r.status !== 'CANCELLED' && wide > 28 && (
+                              <>
+                                <span
+                                  onPointerDown={(e) => {
+                                    if (e.button !== 0) return; // right-click → context menu
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    dragRef.current = {
+                                      id: r.id,
+                                      mode: 'resize',
+                                      edge: 'start',
+                                      startX: e.clientX,
+                                      origStart: abs.start,
+                                      origEnd: abs.end,
+                                      origTableId: r.tableId,
+                                    };
+                                  }}
+                                  className="absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center"
+                                  style={{ touchAction: 'none' }}
+                                >
+                                  <span className="w-0.5 h-4 bg-current opacity-40 rounded-full" />
+                                </span>
+                                <span
+                                  onPointerDown={(e) => {
+                                    if (e.button !== 0) return; // right-click → context menu
+                                    e.stopPropagation();
+                                    e.preventDefault();
+                                    dragRef.current = {
+                                      id: r.id,
+                                      mode: 'resize',
+                                      edge: 'end',
+                                      startX: e.clientX,
+                                      origStart: abs.start,
+                                      origEnd: abs.end,
+                                      origTableId: r.tableId,
+                                    };
+                                  }}
+                                  className="absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize flex items-center justify-center"
+                                  style={{ touchAction: 'none' }}
+                                >
+                                  <span className="w-0.5 h-4 bg-current opacity-40 rounded-full" />
+                                </span>
+                              </>
+                            )}
                           </div>
                         );
                       })}
+                      </>
+                      )}
                     </div>
-                    {/* fills leftover width on wide screens (gray = out of range) */}
-                    <div className="flex-1 bg-slate-50" />
                   </div>
                 );
               })}
             </div>
           ))}
           {/* one continuous now-line across the whole body, at z-[5] so it sits
-              above row content but below the opaque sticky label column (z-10),
-              which clips it at the column edge with pure CSS (no scroll lag). */}
-          {nowAbs !== null && nowAbs >= rangeStart && nowAbs <= rangeEnd && tables.length > 0 && (
+              above table-row content but BELOW the opaque sticky label cells
+              (z-10) and the zone-header strips (z-10), which clip it inside the
+              label column and let it pass softly behind the zone headers. */}
+          {showNow && nowAbs !== null && nowAbs >= rangeStart && nowAbs <= rangeEnd && tables.length > 0 && (
             <div
-              className="absolute top-0 bottom-0 w-0.5 bg-red-500 pointer-events-none z-[5]"
+              className="absolute top-0 bottom-0 w-0.5 bg-red-500/70 pointer-events-none z-[5]"
               style={{ left: LABEL_W + minToX(nowAbs) }}
             />
           )}
@@ -1174,6 +1472,58 @@ function TableScheduler({
         </div>
       </div>
     </div>
+    {ctxMenu && (
+      <>
+        {/* click-away layer */}
+        <div
+          className="fixed inset-0 z-40"
+          onClick={() => setCtxMenu(null)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setCtxMenu(null);
+          }}
+        />
+        <div
+          className="fixed z-50 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 text-sm"
+          style={{
+            left: Math.min(ctxMenu.x, window.innerWidth - 200),
+            top: Math.min(ctxMenu.y, window.innerHeight - 180),
+          }}
+        >
+          <button
+            onClick={() => { onEdit(ctxMenu.res); setCtxMenu(null); }}
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+          >
+            <FiEdit2 size={14} /> Edit reservation
+          </button>
+          {!['SEATED', 'COMPLETED', 'CANCELLED'].includes(ctxMenu.res.status) && (
+            <button
+              onClick={() => { onArrive(ctxMenu.res); setCtxMenu(null); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+            >
+              <FiUserCheck size={14} /> Mark seated
+            </button>
+          )}
+          {!['COMPLETED', 'CANCELLED'].includes(ctxMenu.res.status) && (
+            <button
+              onClick={() => { onComplete(ctxMenu.res); setCtxMenu(null); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+            >
+              <FiCheckCircle size={14} /> Mark completed
+            </button>
+          )}
+          {ctxMenu.res.status !== 'CANCELLED' && (
+            <button
+              onClick={() => { onCancel(ctxMenu.res); setCtxMenu(null); }}
+              className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600"
+            >
+              <FiXCircle size={14} /> Cancel reservation
+            </button>
+          )}
+        </div>
+      </>
+    )}
+    </>
   );
 }
 
@@ -1186,6 +1536,7 @@ function DayList({
   tables: TableModel[];
   onEdit: (r: Reservation) => void;
 }) {
+  const now = useNow();
   const tableNum = (id: string | null) => tables.find((t) => t.id === id)?.number ?? '—';
   const sorted = [...reservations].sort((a, b) => toMin(a.startTime) - toMin(b.startTime));
   return (
@@ -1194,7 +1545,7 @@ function DayList({
         <p className="px-4 py-8 text-center text-slate-400 text-sm">No reservations for this day.</p>
       )}
       {sorted.map((r) => {
-        const visual = reservationVisual(r);
+        const visual = reservationVisual(r, now);
         return (
           <button
             key={r.id}

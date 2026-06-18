@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "portal-preview",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "apps/portal", "--port", "5180", "--strictPort"],
+      "port": 5180
+    }
+  ]
+}

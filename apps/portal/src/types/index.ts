@@ -68,7 +68,6 @@ export interface Restaurant {
   openingHours: Record<string, { open: string; close: string }> | null;
   status: 'PENDING' | 'APPROVED' | 'DISABLED';
   published: boolean;
-  importSource: string;
   reservationRules: ReservationRules | null;
   reservationConfirmationPolicy: ConfirmationPolicy | null;
   capacityRules: CapacityRules | null;
@@ -78,7 +77,6 @@ export interface Restaurant {
   floorPlanBackground: string | null;
   description: string;
   reviewCount: number;
-  googleSyncedAt: string | null;
   restDays: string[];
   cuisines: string[];
   lat: number | null;

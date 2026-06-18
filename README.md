@@ -55,7 +55,7 @@ Then open:
   customers (a blocked table simply can't be booked).
 - **Soft delete** everywhere (`isArchived` + `deletedAt`); reads filter archived rows.
 - **Auth** is real JWT + bcrypt + Nest guards (staff vs admin, with restaurant-ownership checks).
-- Notifications, SMS verification, and Google-Maps import are mocked for the demo.
+- Notifications and SMS verification are mocked for the demo.
 
 ## Per-workspace scripts
 

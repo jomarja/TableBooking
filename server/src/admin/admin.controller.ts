@@ -42,16 +42,6 @@ export class AdminController {
     return this.admin.archiveRestaurant(id);
   }
 
-  @Post('restaurants/:id/sync')
-  syncOne(@Param('id') id: string) {
-    return this.admin.syncRestaurant(id);
-  }
-
-  @Post('restaurants/sync-all')
-  syncAll() {
-    return this.admin.syncAllRestaurants();
-  }
-
   @Get('stats')
   stats() {
     return this.admin.stats();

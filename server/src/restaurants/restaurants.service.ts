@@ -4,7 +4,6 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { ImportService } from '../import/import.service';
 import {
   serializeRestaurant,
 } from '../common/serializers';
@@ -19,10 +18,7 @@ const restaurantInclude = {
 
 @Injectable()
 export class RestaurantsService {
-  constructor(
-    private prisma: PrismaService,
-    private importer: ImportService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
   /** Public list — only approved + published, not archived. */
   async findAllPublic() {
@@ -80,7 +76,6 @@ export class RestaurantsService {
       'published',
       'outdoorSeating',
       'familyFriendly',
-      'importSource',
       'floorPlanBackground',
       'description',
       'restDays',
@@ -251,31 +246,6 @@ export class RestaurantsService {
   async deleteMenuItem(id: string, userRestaurantId: string | undefined, itemId: string) {
     this.assertOwnership(id, userRestaurantId);
     await this.prisma.menuItem.deleteMany({ where: { id: itemId, restaurantId: id } });
-    return this.findOneForStaff(id);
-  }
-
-  /** Sync from Google (re-runs import and updates safe fields). */
-  async syncGoogle(id: string, userRestaurantId: string | undefined, importUrl?: string) {
-    this.assertOwnership(id, userRestaurantId);
-    const r = await this.prisma.restaurant.findFirst({ where: { id, isArchived: false } });
-    if (!r) throw new NotFoundException('Restaurant not found');
-    const url = importUrl || '';
-    if (!url) {
-      // Nothing to sync without a URL; just return current data.
-      return this.findOneForStaff(id);
-    }
-    const prefill = this.importer.prefill(url, 'GOOGLE_MAPS').data as any;
-    const data: any = { googleSyncedAt: new Date() };
-    if (prefill.openingTime) data.openingTime = prefill.openingTime;
-    if (prefill.kitchenClosing) data.kitchenClosing = prefill.kitchenClosing;
-    if (prefill.closingTime) data.closingTime = prefill.closingTime;
-    if (prefill.openingHours) data.openingHours = prefill.openingHours;
-    if (prefill.website) data.website = prefill.website;
-    if (prefill.phone) data.phone = prefill.phone;
-    if (prefill.rating) data.rating = prefill.rating;
-    if (prefill.reviewCount) data.reviewCount = prefill.reviewCount;
-    if (prefill.priceLevel) data.priceLevel = prefill.priceLevel;
-    await this.prisma.restaurant.update({ where: { id }, data });
     return this.findOneForStaff(id);
   }
 

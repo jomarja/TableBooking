@@ -24,7 +24,6 @@ export class UpdateRestaurantDto {
   @IsOptional() @IsBoolean() published?: boolean;
   @IsOptional() @IsBoolean() outdoorSeating?: boolean;
   @IsOptional() @IsBoolean() familyFriendly?: boolean;
-  @IsOptional() @IsString() importSource?: string;
   @IsOptional() @IsString() floorPlanBackground?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsArray() @IsString({ each: true }) restDays?: string[];

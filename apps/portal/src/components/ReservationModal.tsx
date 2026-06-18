@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { FiX, FiTrash2, FiUserCheck, FiLogOut, FiBell } from 'react-icons/fi';
+import { FiX, FiTrash2, FiUserCheck, FiBell } from 'react-icons/fi';
 import { api } from '../api/client';
 import type { Reservation, ReservationChannel, ReservationStatus, TableModel } from '../types';
 import { RESERVATION_STATUSES } from './statusBadge';
@@ -89,12 +89,21 @@ export function ReservationModal({
     }
   };
 
-  const remove = async () => {
+  // Cancelling sets status = CANCELLED and keeps the reservation visible
+  // (struck-through) for the staff's records — it is NOT archived/hidden.
+  // Archiving/deleting is a separate admin-only action.
+  const cancelReservation = async () => {
     if (!reservation) return;
-    if (!confirm('Cancel and archive this reservation?')) return;
+    if (!confirm('Cancel this reservation? It stays visible (struck-through) for your records.')) return;
     setSaving(true);
-    await api.deleteReservation(reservation.id);
-    onSaved(true);
+    setError('');
+    try {
+      const res = await api.updateReservation(reservation.id, { status: 'CANCELLED' });
+      onSaved(res.notifyCustomer, reservation.id);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to cancel');
+      setSaving(false);
+    }
   };
 
   return (
@@ -112,99 +121,108 @@ export function ReservationModal({
           </button>
         </div>
 
-        <div className="p-6 space-y-4">
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="First name">
-              <input className="tb-input" value={form.name} onChange={(e) => set('name', e.target.value)} />
-            </Field>
-            <Field label="Surname">
-              <input className="tb-input" value={form.surname} onChange={(e) => set('surname', e.target.value)} />
-            </Field>
-          </div>
+        <div className="p-6 space-y-6">
+          {/* Section 1 — Guest Information */}
+          <Section title="Guest Information">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="First name">
+                <input className="tb-input" value={form.name} onChange={(e) => set('name', e.target.value)} />
+              </Field>
+              <Field label="Surname">
+                <input className="tb-input" value={form.surname} onChange={(e) => set('surname', e.target.value)} />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Phone">
+                <input className="tb-input" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
+              </Field>
+              <Field label="Guests">
+                <input
+                  type="number"
+                  min={1}
+                  className="tb-input"
+                  value={form.guests}
+                  onChange={(e) => set('guests', Number(e.target.value))}
+                />
+              </Field>
+            </div>
+          </Section>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Phone">
-              <input className="tb-input" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-            </Field>
-            <Field label="Guests">
-              <input
-                type="number"
-                min={1}
-                className="tb-input"
-                value={form.guests}
-                onChange={(e) => set('guests', Number(e.target.value))}
-              />
-            </Field>
-          </div>
-
-          <Field label="Table">
-            <select className="tb-input" value={form.tableId} onChange={(e) => set('tableId', e.target.value)}>
-              <option value="">— No table —</option>
-              {tables.map((t) => (
-                <option key={t.id} value={t.id}>
-                  Table {t.number} ({t.capacity} seats)
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Date">
-              <input type="date" className="tb-input" value={form.date} onChange={(e) => set('date', e.target.value)} />
-            </Field>
-            <Field label="Start">
-              <input type="time" className="tb-input" value={form.startTime} onChange={(e) => set('startTime', e.target.value)} />
-            </Field>
-            <Field label="End">
-              <input type="time" className="tb-input" value={form.endTime} onChange={(e) => set('endTime', e.target.value)} />
-            </Field>
-          </div>
-
-          <div className="grid grid-cols-3 gap-3">
-            <Field label="Occasion">
-              <select className="tb-input" value={form.occasion} onChange={(e) => set('occasion', e.target.value)}>
-                <option value="">—</option>
-                {['Birthday', 'Anniversary', 'Graduation', 'Business Meeting', 'Date Night', 'Other'].map((o) => (
-                  <option key={o} value={o}>{o}</option>
+          {/* Section 2 — Reservation Details */}
+          <Section title="Reservation Details">
+            <Field label="Table">
+              <select className="tb-input" value={form.tableId} onChange={(e) => set('tableId', e.target.value)}>
+                <option value="">— No table —</option>
+                {tables.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    Table {t.number} ({t.capacity} seats)
+                  </option>
                 ))}
               </select>
             </Field>
-            <Field label="Status">
+            <div className="grid grid-cols-3 gap-3">
+              <Field label="Date">
+                <input type="date" className="tb-input" value={form.date} onChange={(e) => set('date', e.target.value)} />
+              </Field>
+              <Field label="Start">
+                <input type="time" className="tb-input" value={form.startTime} onChange={(e) => set('startTime', e.target.value)} />
+              </Field>
+              <Field label="End">
+                <input type="time" className="tb-input" value={form.endTime} onChange={(e) => set('endTime', e.target.value)} />
+              </Field>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Occasion">
+                <select className="tb-input" value={form.occasion} onChange={(e) => set('occasion', e.target.value)}>
+                  <option value="">—</option>
+                  {['Birthday', 'Anniversary', 'Graduation', 'Business Meeting', 'Date Night', 'Other'].map((o) => (
+                    <option key={o} value={o}>{o}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Booking channel">
+                <select className="tb-input" value={form.channel} onChange={(e) => set('channel', e.target.value)}>
+                  {RESERVATION_CHANNELS.map((c) => (
+                    <option key={c} value={c}>{channelMeta(c).label}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          </Section>
+
+          {/* Section 3 — Status */}
+          <Section title="Status">
+            <Field label="Reservation status">
               <select className="tb-input" value={form.status} onChange={(e) => set('status', e.target.value)}>
                 {RESERVATION_STATUSES.map((s) => (
                   <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
                 ))}
               </select>
             </Field>
-            <Field label="Booking channel">
-              <select className="tb-input" value={form.channel} onChange={(e) => set('channel', e.target.value)}>
-                {RESERVATION_CHANNELS.map((c) => (
-                  <option key={c} value={c}>{channelMeta(c).label}</option>
-                ))}
-              </select>
+          </Section>
+
+          {/* Section 4 — Notes */}
+          <Section title="Notes">
+            <Field label="Customer notes">
+              <textarea className="tb-input" rows={2} value={form.customerNotes} onChange={(e) => set('customerNotes', e.target.value)} />
             </Field>
-          </div>
-
-          <Field label="Customer notes">
-            <textarea className="tb-input" rows={2} value={form.customerNotes} onChange={(e) => set('customerNotes', e.target.value)} />
-          </Field>
-
-          <Field label="Internal staff notes (never shown to customer)">
-            <textarea
-              className="tb-input bg-amber-50"
-              rows={2}
-              value={form.staffNotes}
-              onChange={(e) => set('staffNotes', e.target.value)}
-              placeholder="VIP customer, allergy, manager approval…"
-            />
-          </Field>
+            <Field label="Internal staff notes (never shown to customer)">
+              <textarea
+                className="tb-input bg-amber-50"
+                rows={2}
+                value={form.staffNotes}
+                onChange={(e) => set('staffNotes', e.target.value)}
+                placeholder="VIP customer, allergy, manager approval…"
+              />
+            </Field>
+          </Section>
 
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
 
         <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100">
-          {isEdit ? (
-            <button onClick={remove} className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 font-medium">
+          {isEdit && form.status !== 'CANCELLED' ? (
+            <button onClick={cancelReservation} className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 font-medium">
               <FiTrash2 size={16} /> Cancel reservation
             </button>
           ) : (
@@ -231,16 +249,6 @@ export function ReservationModal({
                 <FiUserCheck size={16} /> Arrived
               </button>
             )}
-            {isEdit && form.status === 'SEATED' && (
-              <button
-                onClick={() => setStatusQuick('COMPLETED')}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-200 text-slate-700 text-sm font-medium hover:bg-slate-300 disabled:opacity-60"
-                title="Mark guest as left (completed)"
-              >
-                <FiLogOut size={16} /> Person left
-              </button>
-            )}
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
               Close
             </button>
@@ -255,6 +263,15 @@ export function ReservationModal({
         </div>
       </div>
     </div>
+  );
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3">
+      <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</h4>
+      {children}
+    </section>
   );
 }
 

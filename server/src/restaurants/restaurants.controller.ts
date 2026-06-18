@@ -154,15 +154,4 @@ export class RestaurantsController {
   ) {
     return this.restaurants.deleteMenuItem(id, user.restaurantId, itemId);
   }
-
-  // ---- Google sync ----
-  @UseGuards(JwtAuthGuard, StaffGuard)
-  @Post(':id/sync')
-  syncGoogle(
-    @Param('id') id: string,
-    @Body() body: { importUrl?: string },
-    @CurrentUser() user: JwtPayload,
-  ) {
-    return this.restaurants.syncGoogle(id, user.restaurantId, body.importUrl);
-  }
 }

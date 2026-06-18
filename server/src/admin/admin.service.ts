@@ -5,15 +5,11 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
-import { ImportService } from '../import/import.service';
 import { serializeRestaurant } from '../common/serializers';
 
 @Injectable()
 export class AdminService {
-  constructor(
-    private prisma: PrismaService,
-    private importer: ImportService,
-  ) {}
+  constructor(private prisma: PrismaService) {}
 
   /** All restaurants (any status) for the admin console. */
   async listRestaurants() {
@@ -39,7 +35,7 @@ export class AdminService {
     }));
   }
 
-  /** Create a restaurant + its staff account. Optionally prefill via import. */
+  /** Create a restaurant + its staff account. */
   async createRestaurant(dto: any) {
     const existing = await this.prisma.staff.findUnique({
       where: { email: dto.ownerEmail.toLowerCase().trim() },
@@ -48,27 +44,20 @@ export class AdminService {
       throw new BadRequestException('A staff account with this email exists');
     }
 
-    let prefill: any = {};
-    if (dto.importUrl) {
-      prefill = this.importer.prefill(dto.importUrl, 'GOOGLE_MAPS').data;
-    }
-
     const passwordHash = await bcrypt.hash(dto.ownerPassword || 'password', 10);
 
     const restaurant = await this.prisma.restaurant.create({
       data: {
-        name: dto.name || prefill.name || 'New Restaurant',
+        name: dto.name || 'New Restaurant',
         cuisine: dto.cuisine || 'georgian',
-        address: dto.address || prefill.address || '',
-        website: dto.website || prefill.website || '',
-        phone: dto.phone || prefill.phone || '',
-        openingTime: prefill.openingTime || '10:00',
-        kitchenClosing: prefill.kitchenClosing || '22:00',
-        closingTime: prefill.closingTime || '23:00',
-        openingHours: prefill.openingHours ?? undefined,
+        address: dto.address || '',
+        website: dto.website || '',
+        phone: dto.phone || '',
+        openingTime: '10:00',
+        kitchenClosing: '22:00',
+        closingTime: '23:00',
         status: 'PENDING',
         published: false,
-        importSource: dto.importUrl ? 'GOOGLE_MAPS' : 'MANUAL',
         reservationRules: {
           defaultDurationMinutes: 120,
           durationByGuests: [
@@ -121,36 +110,6 @@ export class AdminService {
       data: { passwordHash, firstLogin: true },
     });
     return { ok: true };
-  }
-
-  /** Re-sync one restaurant's Google data. */
-  async syncRestaurant(id: string) {
-    const r = await this.prisma.restaurant.findFirst({ where: { id, isArchived: false } });
-    if (!r) throw new NotFoundException('Restaurant not found');
-    const prefill = this.importer.prefill('', 'GOOGLE_MAPS').data as any;
-    const data: any = { googleSyncedAt: new Date() };
-    if (prefill.openingTime) data.openingTime = prefill.openingTime;
-    if (prefill.kitchenClosing) data.kitchenClosing = prefill.kitchenClosing;
-    if (prefill.closingTime) data.closingTime = prefill.closingTime;
-    if (prefill.openingHours) data.openingHours = prefill.openingHours;
-    if (prefill.website) data.website = prefill.website;
-    if (prefill.phone) data.phone = prefill.phone;
-    if (prefill.rating) data.rating = prefill.rating;
-    if (prefill.reviewCount) data.reviewCount = prefill.reviewCount;
-    await this.prisma.restaurant.update({ where: { id }, data });
-    return { ok: true };
-  }
-
-  /** Sync all non-archived restaurants. */
-  async syncAllRestaurants() {
-    const ids = await this.prisma.restaurant.findMany({
-      where: { isArchived: false },
-      select: { id: true },
-    });
-    for (const { id } of ids) {
-      await this.syncRestaurant(id);
-    }
-    return { ok: true, count: ids.length };
   }
 
   async archiveRestaurant(id: string) {

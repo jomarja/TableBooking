@@ -7,7 +7,6 @@ import {
   FiKey,
   FiRefreshCw,
   FiSearch,
-  FiGlobe,
 } from 'react-icons/fi';
 import { api, type AdminRestaurant, type AdminStats } from '../api/client';
 import { useAuth } from '../context/AuthContext';
@@ -27,7 +26,6 @@ export default function ConsolePage() {
   const [creating, setCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState<string | null>(null);
-  const [syncingAll, setSyncingAll] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -51,16 +49,6 @@ export default function ConsolePage() {
       await load();
     } finally {
       setBusy(null);
-    }
-  };
-
-  const syncAll = async () => {
-    setSyncingAll(true);
-    try {
-      await api.syncAll();
-      await load();
-    } finally {
-      setSyncingAll(false);
     }
   };
 
@@ -130,15 +118,6 @@ export default function ConsolePage() {
               <FiRefreshCw className={loading ? 'animate-spin' : ''} />
             </button>
             <button
-              onClick={syncAll}
-              disabled={syncingAll}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-200 text-slate-600 text-sm hover:bg-white disabled:opacity-50"
-              title="Sync all restaurants with Google"
-            >
-              <FiGlobe size={15} className={syncingAll ? 'animate-spin' : ''} />
-              Sync All
-            </button>
-            <button
               onClick={() => setCreating(true)}
               className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
             >
@@ -205,14 +184,6 @@ export default function ConsolePage() {
                             <FiSlash /> Disable
                           </button>
                         )}
-                        <button
-                          onClick={() => act(() => api.syncRestaurant(r.id), r.id)}
-                          disabled={busy === r.id}
-                          className="flex items-center gap-1 px-2 py-1 rounded text-xs text-slate-600 hover:bg-slate-100"
-                          title="Sync with Google"
-                        >
-                          <FiGlobe /> Sync
-                        </button>
                         <button
                           onClick={() => resetPw(r)}
                           disabled={busy === r.id}
