@@ -1,33 +1,24 @@
 {
   "name": "tablebooker",
   "private": true,
-  "version": "0.0.0",
+  "version": "1.0.0",
   "type": "module",
+  "workspaces": [
+    "apps/*",
+    "server",
+    "shared"
+  ],
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
-    "lint": "eslint .",
-    "preview": "vite preview"
-  },
-  "dependencies": {
-    "@tailwindcss/vite": "^4.3.0",
-    "framer-motion": "^12.40.0",
-    "react": "^19.2.6",
-    "react-calendar": "^6.0.1",
-    "react-dom": "^19.2.6",
-    "react-icons": "^5.6.0",
-    "react-router-dom": "^7.17.0",
-    "tailwindcss": "^4.3.0"
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "dev:server": "npm run start:dev --workspace=@tablebooker/server",
+    "dev:customer": "npm run dev --workspace=@tablebooker/customer",
+    "dev:portal": "npm run dev --workspace=@tablebooker/portal",
+    "dev:admin": "npm run dev --workspace=@tablebooker/admin",
+    "dev": "concurrently -n server,customer,portal,admin -c blue,green,magenta,yellow \"npm:dev:server\" \"npm:dev:customer\" \"npm:dev:portal\" \"npm:dev:admin\"",
+    "build": "npm run build --workspace=@tablebooker/server && npm run build --workspace=@tablebooker/customer && npm run build --workspace=@tablebooker/portal && npm run build --workspace=@tablebooker/admin"
   },
   "devDependencies": {
-    "@eslint/js": "^10.0.1",
-    "@types/react": "^19.2.14",
-    "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^10.3.0",
-    "eslint-plugin-react-hooks": "^7.1.1",
-    "eslint-plugin-react-refresh": "^0.5.2",
-    "globals": "^17.6.0",
-    "vite": "^8.0.12"
+    "concurrently": "^9.1.0"
   }
 }

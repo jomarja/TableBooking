@@ -1,0 +1,26 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  background: #0f172a;
+}
+
+.tb-input {
+  width: 100%;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  border: 1px solid #cbd5e1;
+  font-size: 0.875rem;
+  color: #1e293b;
+  background: #fff;
+}
+.tb-input:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px #6366f1;
+  border-color: transparent;
+}

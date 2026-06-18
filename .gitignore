@@ -10,7 +10,16 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+build
 *.local
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Nest build output
+server/dist
 
 # Editor directories and files
 .vscode/*

@@ -1,0 +1,300 @@
+// TableBooker — Prisma schema (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RestaurantStatus {
+  PENDING
+  APPROVED
+  DISABLED
+}
+
+enum ReservationStatus {
+  PENDING
+  CONFIRMED
+  SEATED
+  COMPLETED
+  CANCELLED
+}
+
+enum ReservationSource {
+  CUSTOMER
+  STAFF
+  ADMIN
+}
+
+// How the booking reached the restaurant. Editable by staff, unlike `source`
+// (which records the system actor that created the row).
+enum ReservationChannel {
+  ONLINE // self-service via the customer app
+  PHONE // customer called and staff entered it
+  WALK_IN // customer walked in
+}
+
+enum TableShape {
+  CIRCLE
+  SQUARE
+  RECT
+}
+
+enum BlockScope {
+  TABLES
+  ZONE
+}
+
+enum BlockType {
+  SINGLE
+  RECURRING
+}
+
+enum ImageType {
+  COVER
+  INTERIOR
+  TERRACE
+  FOOD
+  BAR
+}
+
+enum NotificationType {
+  SMS
+  EMAIL
+  PUSH
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+}
+
+enum ImportProvider {
+  GOOGLE_MAPS
+  MANUAL
+}
+
+model Restaurant {
+  id            String           @id @default(cuid())
+  name          String
+  cuisine       String
+  rating        Float            @default(0)
+  priceRange    String           @default("")
+  priceLevel    Int              @default(1)
+  address       String           @default("")
+  website       String           @default("")
+  phone         String           @default("")
+  timezone      String           @default("Asia/Tbilisi")
+  openingTime   String           @default("10:00")
+  kitchenClosing String          @default("22:00")
+  closingTime   String           @default("23:00")
+  openingHours  Json? // per-weekday { mon: {open,close}, ... }
+  distance      Float            @default(0)
+  popular       Boolean          @default(false)
+  outdoorSeating Boolean         @default(false)
+  familyFriendly Boolean         @default(false)
+  status        RestaurantStatus @default(PENDING)
+  published     Boolean          @default(false)
+  importSource  ImportProvider   @default(MANUAL)
+  // Config blobs (validated by DTOs)
+  reservationRules             Json?
+  reservationConfirmationPolicy Json?
+  capacityRules                Json?
+  holidayClosures              Json? // [{ date, reason }]
+  allowTableSelection          Boolean @default(true)
+  maxGuests                    Int     @default(20)
+  floorPlanBackground          String?
+  description    String           @default("")
+  reviewCount    Int              @default(0)
+  googleSyncedAt DateTime?
+  restDays       String[]         @default([])
+  cuisines       String[]         @default([])
+  lat            Float?
+  lng            Float?
+  // Soft delete
+  isArchived Boolean   @default(false)
+  deletedAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  images            RestaurantImage[]
+  menu              MenuItem[]
+  zones             Zone[]
+  tables            Table[]
+  floorPlanElements FloorPlanElement[]
+  reservations      Reservation[]
+  blockedPeriods    BlockedPeriod[]
+  staff             Staff[]
+}
+
+model RestaurantImage {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  url          String
+  type         ImageType  @default(INTERIOR)
+  sortOrder    Int        @default(0)
+
+  @@index([restaurantId])
+}
+
+model MenuItem {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  category     String     @default("Main")
+  name         String
+  description  String     @default("")
+  price        String     @default("")
+  photo        String?
+  sortOrder    Int        @default(0)
+
+  @@index([restaurantId])
+}
+
+model Zone {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  name         String
+  tables       Table[]
+
+  @@index([restaurantId])
+}
+
+model Table {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  number       Int
+  capacity     Int        @default(2)
+  shape        TableShape @default(CIRCLE)
+  zoneId       String?
+  zone         Zone?      @relation(fields: [zoneId], references: [id], onDelete: SetNull)
+  tags         String[]   @default([])
+  mergeGroup   String?
+  posX         Float      @default(50)
+  posY         Float      @default(50)
+  width        Float      @default(8)
+  height       Float      @default(8)
+  rotation     Float      @default(0)
+
+  reservations Reservation[]
+
+  @@index([restaurantId])
+  @@index([zoneId])
+}
+
+model FloorPlanElement {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  type         String // table|window|door|wc|kitchen|ac|bar|wall|plant|terrace|entrance
+  posX         Float      @default(0)
+  posY         Float      @default(0)
+  width        Float      @default(10)
+  height       Float      @default(10)
+  rotation     Float      @default(0)
+  metadata     Json? // { tableId?, label? }
+
+  @@index([restaurantId])
+}
+
+model Staff {
+  id           String     @id @default(cuid())
+  email        String     @unique
+  passwordHash String
+  name         String
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  firstLogin   Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+
+  @@index([restaurantId])
+}
+
+model Admin {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+}
+
+model Reservation {
+  id            String            @id @default(cuid())
+  restaurantId  String
+  restaurant    Restaurant        @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  tableId       String?
+  table         Table?            @relation(fields: [tableId], references: [id], onDelete: SetNull)
+  date          String // YYYY-MM-DD
+  startTime     String // HH:mm
+  endTime       String // HH:mm
+  guests        Int               @default(2)
+  name          String            @default("")
+  surname       String            @default("")
+  phone         String            @default("")
+  occasion      String?
+  customerNotes String?
+  staffNotes    String?
+  source        ReservationSource @default(CUSTOMER)
+  channel       ReservationChannel @default(ONLINE)
+  status        ReservationStatus @default(CONFIRMED)
+  isArchived    Boolean           @default(false)
+  deletedAt     DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  events        ReservationEvent[]
+  notifications Notification[]
+
+  @@index([restaurantId, date])
+  @@index([tableId, date])
+}
+
+model BlockedPeriod {
+  id             String     @id @default(cuid())
+  restaurantId   String
+  restaurant     Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  scope          BlockScope @default(TABLES)
+  tableIds       String[]   @default([])
+  zoneId         String?
+  type           BlockType  @default(SINGLE)
+  date           String? // YYYY-MM-DD for SINGLE
+  recurrenceRule Json? // { freq, byWeekday?, byMonthDay?, until? }
+  startTime      String
+  endTime        String
+  reason         String     @default("Private Event")
+  isArchived     Boolean    @default(false)
+  deletedAt      DateTime?
+  createdAt      DateTime   @default(now())
+
+  @@index([restaurantId, date])
+}
+
+model ReservationEvent {
+  id            String      @id @default(cuid())
+  reservationId String
+  reservation   Reservation @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  action        String // created|moved|table_changed|time_changed|resized|cancelled|status_changed
+  user          String      @default("system")
+  details       Json?
+  timestamp     DateTime    @default(now())
+
+  @@index([reservationId])
+}
+
+model Notification {
+  id            String             @id @default(cuid())
+  reservationId String
+  reservation   Reservation        @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  type          NotificationType   @default(SMS)
+  message       String
+  status        NotificationStatus @default(PENDING)
+  createdAt     DateTime           @default(now())
+
+  @@index([reservationId])
+}
