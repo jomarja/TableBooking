@@ -90,9 +90,21 @@ export interface Restaurant {
   floorPlan: { background: string | null; elements: FloorElement[] };
 }
 
+export type ResourceMode = 'FLOOR_PLAN' | 'RESOURCE_LIST';
+export interface ResourceMeta {
+  name?: string;
+  description?: string;
+}
 export interface ReservationRules {
   defaultDurationMinutes: number;
   durationByGuests: { maxGuests: number; minutes: number }[];
+  // How resources are managed. FLOOR_PLAN (default) = floor-plan tables +
+  // customer table selection; RESOURCE_LIST = manually-listed resources
+  // (tables/rooms/spaces), no floor plan, staff/auto assignment.
+  resourceMode?: ResourceMode;
+  // Per-table display name/description for RESOURCE_LIST mode, keyed by table id.
+  // (Stored here to avoid a schema migration; promote to Table columns later.)
+  resourceMeta?: Record<string, ResourceMeta>;
 }
 
 export interface ConfirmationPolicy {

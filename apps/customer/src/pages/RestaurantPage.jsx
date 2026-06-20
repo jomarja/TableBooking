@@ -153,7 +153,11 @@ export default function RestaurantPage() {
     );
   }
 
-  const allowTableSelection = config?.allowTableSelection !== false;
+  // In Resource List mode there's no floor plan, so customers never pick a
+  // specific resource — staff assign it later. Otherwise honour the setting.
+  const resourceMode = restaurant?.reservationRules?.resourceMode;
+  const allowTableSelection =
+    resourceMode !== 'RESOURCE_LIST' && config?.allowTableSelection !== false;
 
   const openingMinutes = parseTime(restaurant.openingTime);
   const kitchenClosingMinutes = parseTime(restaurant.kitchenClosing);

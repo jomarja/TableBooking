@@ -5,6 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod, Reservation, Restaurant, TableModel } from '../types';
 import { ReservationModal } from '../components/ReservationModal';
 import { ChannelIcon, channelMeta } from '../components/channel';
+import { resourceLabel } from '../lib/resources';
 
 type View = 'day' | 'week' | 'table';
 
@@ -15,8 +16,6 @@ const DEFAULT_PX_PER_HOUR = 90;
 const MIN_PX_PER_HOUR = 44;
 const MAX_PX_PER_HOUR = 220;
 const ROW_H = 64;
-const ZONE_H = 40; // approx zone-header strip height (used only for row virtualization math)
-const ROW_OVERSCAN = 400; // px rendered beyond the viewport so fast scroll never shows blanks
 const MIN_PER_DAY = 24 * 60;
 const AUTOSCROLL_EDGE = 56; // px from top/bottom edge that triggers auto-scroll while dragging
 const AUTOSCROLL_MAX = 20; // max auto-scroll speed in px per frame
@@ -176,6 +175,15 @@ export default function ReservationsPage() {
   const zoneName = useCallback(
     (zoneId: string | null) => restaurant?.zones.find((z) => z.id === zoneId)?.name || 'Unzoned',
     [restaurant],
+  );
+  // Row/resource label: custom resource name (Resource List mode) or "Table N".
+  const tableLabel = useCallback((t: TableModel) => resourceLabel(restaurant, t), [restaurant]);
+  const tableLabelById = useCallback(
+    (id: string | null) => {
+      const t = tables.find((x) => x.id === id);
+      return t ? tableLabel(t) : '—';
+    },
+    [tables, tableLabel],
   );
 
   const load = useCallback(async () => {
@@ -348,6 +356,7 @@ export default function ReservationsPage() {
           dayIndexOf={dayIndexOf}
           blocksForTable={blocksForTable}
           zoneName={zoneName}
+          tableLabel={tableLabel}
           showNow={showNowLine}
           onEdit={setEditing}
           onChanged={onSaved}
@@ -364,7 +373,7 @@ export default function ReservationsPage() {
       {view === 'day' && (
         <DayList
           reservations={reservations}
-          tables={tables}
+          tableLabelById={tableLabelById}
           onEdit={setEditing}
         />
       )}
@@ -413,6 +422,7 @@ function TableScheduler({
   dayIndexOf,
   blocksForTable,
   zoneName,
+  tableLabel,
   showNow,
   onEdit,
   onChanged,
@@ -428,6 +438,7 @@ function TableScheduler({
   dayIndexOf: (date: string) => number;
   blocksForTable: (id: string, date: string) => BlockedPeriod[];
   zoneName: (id: string | null) => string;
+  tableLabel: (t: TableModel) => string;
   showNow: boolean;
   onEdit: (r: Reservation) => void;
   onChanged: (notify: boolean, id?: string) => void;
@@ -447,6 +458,7 @@ function TableScheduler({
   // scrollLeft to apply *after* the new width lands (layout effect below).
   const pxPerHourRef = useRef(pxPerHour);
   pxPerHourRef.current = pxPerHour;
+  const rangeStartRef = useRef(0); // mirrors rangeStart for the scroll handler
   const pendingScrollLeftRef = useRef<number | null>(null);
   const applyZoom = useCallback((next: number) => {
     const el = scrollRef.current;
@@ -469,26 +481,21 @@ function TableScheduler({
     }
   }, [pxPerHour]);
 
-  // Row virtualization: track vertical scroll + viewport height so off-screen
-  // table rows can skip rendering their (heavy) gridlines/blocks. rAF-throttled
-  // so scrolling/panning many tables stays smooth.
-  const [vScroll, setVScroll] = useState(0);
-  const [viewH, setViewH] = useState(0);
+  // Floating day indicator: track which day sits at the left of the visible
+  // grid so a small pill can always show the current day while scrolling across
+  // the window. rAF-throttled; only re-renders when the day actually changes.
+  const [inViewDay, setInViewDay] = useState(0);
   const scrollRafRef = useRef<number | null>(null);
   const onSchedScroll = useCallback(() => {
     if (scrollRafRef.current != null) return;
     scrollRafRef.current = requestAnimationFrame(() => {
       scrollRafRef.current = null;
       const el = scrollRef.current;
-      if (el) {
-        setVScroll(el.scrollTop);
-        setViewH(el.clientHeight);
-      }
+      if (!el) return;
+      const leftAbs = rangeStartRef.current + (el.scrollLeft / pxPerHourRef.current) * 60;
+      const idx = Math.min(Math.max(Math.floor(leftAbs / MIN_PER_DAY), 0), WINDOW_DAYS - 1);
+      setInViewDay((prev) => (prev === idx ? prev : idx));
     });
-  }, []);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) setViewH(el.clientHeight);
   }, []);
 
   // "Now" as an absolute axis-minute, if today falls inside the window.
@@ -514,6 +521,7 @@ function TableScheduler({
     if (nowAbs !== null && nowAbs < s) s = Math.max(0, Math.floor((nowAbs - 60) / 60) * 60);
     return s;
   }, [days, nowAbs]);
+  rangeStartRef.current = rangeStart;
   const rangeEnd = WINDOW_DAYS * MIN_PER_DAY;
   const width = ((rangeEnd - rangeStart) / 60) * pxPerHour;
 
@@ -604,19 +612,6 @@ function TableScheduler({
     return Array.from(map.entries());
   }, [tables, zoneName]);
 
-  // Approx vertical offset of each table row (for virtualization visibility).
-  const rowTops = useMemo(() => {
-    const m = new Map<string, number>();
-    let top = 0;
-    for (const [, zoneTables] of grouped) {
-      top += ZONE_H;
-      for (const t of zoneTables) {
-        m.set(t.id, top);
-        top += ROW_H;
-      }
-    }
-    return m;
-  }, [grouped]);
 
   const minToX = useCallback(
     (min: number) => ((min - rangeStart) / 60) * pxPerHour,
@@ -996,7 +991,14 @@ function TableScheduler({
 
   return (
     <>
-    <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+    <div className="relative bg-white rounded-xl border border-slate-200 overflow-hidden">
+      {/* Floating day indicator — always shows which day is in view so staff
+          never lose orientation while scrolling across the window. */}
+      {days[inViewDay] && (
+        <div className="pointer-events-none absolute top-1.5 left-1/2 -translate-x-1/2 z-30 bg-slate-800/90 text-white text-[11px] font-semibold px-2.5 py-0.5 rounded-full shadow-md">
+          {dateLabel(days[inViewDay].date)}
+        </div>
+      )}
       <div
         ref={scrollRef}
         className="tb-scroll select-none"
@@ -1156,13 +1158,6 @@ function TableScheduler({
                 // on release). No glow on rows you're not hovering.
                 const isDropTarget = preview?.mode === 'move' && preview.tableId === t.id;
                 const dropOk = isDropTarget && preview!.valid;
-                // Virtualization: only render this row's heavy timeline contents
-                // when it's within (or near) the viewport. The row box itself
-                // always renders so layout/scroll height/drag-targeting are intact.
-                const rowTop = rowTops.get(t.id) ?? 0;
-                const rowVisible =
-                  viewH === 0 ||
-                  (rowTop + ROW_H > vScroll - ROW_OVERSCAN && rowTop < vScroll + viewH + ROW_OVERSCAN);
                 return (
                   <div
                     key={t.id}
@@ -1183,7 +1178,7 @@ function TableScheduler({
                           : 'bg-white border-slate-100'
                       }`}
                     >
-                      <span className="font-medium text-slate-700">Table {t.number}</span>
+                      <span className="font-medium text-slate-700">{tableLabel(t)}</span>
                       <span className="text-slate-400 text-xs block">{t.capacity} seats</span>
                     </div>
                     <div
@@ -1216,8 +1211,6 @@ function TableScheduler({
                       }}
                       title="Double-click an empty slot to add a reservation"
                     >
-                      {rowVisible && (
-                      <>
                       {/* white open-hours bands over the gray (closed) base */}
                       {openBands.map((b) => (
                         <div
@@ -1445,8 +1438,6 @@ function TableScheduler({
                           </div>
                         );
                       })}
-                      </>
-                      )}
                     </div>
                   </div>
                 );
@@ -1529,15 +1520,14 @@ function TableScheduler({
 
 function DayList({
   reservations,
-  tables,
+  tableLabelById,
   onEdit,
 }: {
   reservations: Reservation[];
-  tables: TableModel[];
+  tableLabelById: (id: string | null) => string;
   onEdit: (r: Reservation) => void;
 }) {
   const now = useNow();
-  const tableNum = (id: string | null) => tables.find((t) => t.id === id)?.number ?? '—';
   const sorted = [...reservations].sort((a, b) => toMin(a.startTime) - toMin(b.startTime));
   return (
     <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100">
@@ -1564,7 +1554,7 @@ function DayList({
                   {r.name} {r.surname}
                 </p>
                 <p className="text-xs text-slate-500">
-                  Table {tableNum(r.tableId)} · {r.guests} guests
+                  {tableLabelById(r.tableId)} · {r.guests} guests
                   {r.occasion ? ` · ${r.occasion}` : ''}
                 </p>
               </div>

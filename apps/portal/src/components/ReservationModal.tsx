@@ -1,26 +1,113 @@
-import { useState } from 'react';
-import { FiX, FiTrash2, FiUserCheck, FiBell } from 'react-icons/fi';
+import { useEffect, useRef, useState } from 'react';
+import {
+  FiX,
+  FiTrash2,
+  FiUsers,
+  FiPhone,
+  FiMapPin,
+  FiCalendar,
+  FiClock,
+  FiMinus,
+  FiPlus,
+  FiChevronRight,
+  FiChevronDown,
+  FiRotateCcw,
+  FiRotateCw,
+} from 'react-icons/fi';
 import { api } from '../api/client';
+import { useAuth } from '../context/AuthContext';
 import type { Reservation, ReservationChannel, ReservationStatus, TableModel } from '../types';
-import { RESERVATION_STATUSES } from './statusBadge';
+import { statusBadge } from './statusBadge';
 import { RESERVATION_CHANNELS, channelMeta } from './channel';
+import { resourceLabel } from '../lib/resources';
 
 interface Props {
   reservation: Reservation | null; // null = create
   tables: TableModel[];
   date: string;
-  // prefill for create mode (e.g. double-clicking a timeline slot)
   initial?: { tableId: string; startTime: string };
-  defaultDuration?: number; // minutes; used to derive end time from start
+  defaultDuration?: number;
   onClose: () => void;
   onSaved: (notify: boolean, id?: string) => void;
 }
 
-// add `minutes` to an "HH:MM" string, clamped to 23:59
+type FormState = {
+  name: string;
+  surname: string;
+  phone: string;
+  guests: number;
+  tableId: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  occasion: string;
+  customerNotes: string;
+  staffNotes: string;
+  status: ReservationStatus;
+  channel: ReservationChannel;
+};
+
+// Module-level clipboard so a copied reservation survives modal close (Ctrl+C / Ctrl+V).
+let copiedReservation: FormState | null = null;
+
+const OCCASIONS = ['Birthday', 'Anniversary', 'Graduation', 'Business Meeting', 'Date Night', 'Other'];
+
+// One-click status actions. "Arrived" = SEATED.
+const STATUS_ACTIONS: { label: string; value: ReservationStatus; active: string }[] = [
+  { label: 'Pending', value: 'PENDING', active: 'bg-orange-500 text-white border-orange-500' },
+  { label: 'Confirmed', value: 'CONFIRMED', active: 'bg-indigo-600 text-white border-indigo-600' },
+  { label: 'Arrived', value: 'SEATED', active: 'bg-amber-400 text-amber-950 border-amber-400' },
+  { label: 'Completed', value: 'COMPLETED', active: 'bg-slate-500 text-white border-slate-500' },
+  { label: 'Cancelled', value: 'CANCELLED', active: 'bg-slate-400 text-white border-slate-400 line-through' },
+];
+const DURATION_ADDS = [30, 60, 90, 120];
+
+function toMin(t: string) {
+  const [h, m] = t.split(':').map(Number);
+  return h * 60 + (m || 0);
+}
+function pad(n: number) {
+  return String(n).padStart(2, '0');
+}
 function addMinutes(time: string, minutes: number) {
-  const [h, m] = time.split(':').map(Number);
-  const total = Math.min(h * 60 + m + minutes, 23 * 60 + 59);
-  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+  let total = toMin(time) + minutes;
+  total = ((total % 1440) + 1440) % 1440;
+  return `${pad(Math.floor(total / 60))}:${pad(total % 60)}`;
+}
+function diffMinutes(start: string, end: string) {
+  let d = toMin(end) - toMin(start);
+  if (d <= 0) d += 1440; // overnight
+  return d;
+}
+function fmtDuration(min: number) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+// Smart parse: "18"→18:00, "1830"→18:30, "9"→09:00, "930"→09:30, "18:45"→18:45.
+function normalizeTime(raw: string, fallback: string) {
+  const s = raw.trim();
+  if (!s) return fallback;
+  let hh: number, mm: number;
+  if (s.includes(':')) {
+    const [h, m] = s.split(':');
+    hh = parseInt(h, 10) || 0;
+    mm = parseInt(m, 10) || 0;
+  } else {
+    const d = s.replace(/\D/g, '');
+    if (!d) return fallback;
+    if (d.length <= 2) { hh = parseInt(d, 10); mm = 0; }
+    else if (d.length === 3) { hh = parseInt(d.slice(0, 1), 10); mm = parseInt(d.slice(1), 10); }
+    else { hh = parseInt(d.slice(0, 2), 10); mm = parseInt(d.slice(2, 4), 10); }
+  }
+  hh = Math.min(Math.max(hh, 0), 23);
+  mm = Math.min(Math.max(mm, 0), 59);
+  return `${pad(hh)}:${pad(mm)}`;
+}
+function shortDate(dStr: string) {
+  return new Date(dStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
 export function ReservationModal({
@@ -32,8 +119,10 @@ export function ReservationModal({
   onClose,
   onSaved,
 }: Props) {
+  const { restaurant } = useAuth();
   const isEdit = !!reservation;
-  const [form, setForm] = useState({
+
+  const buildInitial = (): FormState => ({
     name: reservation?.name || '',
     surname: reservation?.surname || '',
     phone: reservation?.phone || '',
@@ -42,20 +131,55 @@ export function ReservationModal({
     date: reservation?.date || date,
     startTime: reservation?.startTime || initial?.startTime || '19:00',
     endTime:
-      reservation?.endTime ||
-      (initial ? addMinutes(initial.startTime, defaultDuration) : '21:00'),
+      reservation?.endTime || (initial ? addMinutes(initial.startTime, defaultDuration) : '21:00'),
     occasion: reservation?.occasion || '',
     customerNotes: reservation?.customerNotes || '',
     staffNotes: reservation?.staffNotes || '',
     status: (reservation?.status || 'CONFIRMED') as ReservationStatus,
-    // New manual bookings default to walk-in; existing ones keep their channel.
     channel: (reservation?.channel || (isEdit ? 'ONLINE' : 'WALK_IN')) as ReservationChannel,
   });
+
+  // Edit history (undo/redo). `lastKey` coalesces consecutive edits to the same
+  // field (e.g. typing a name) into one undo step.
+  const [hist, setHist] = useState<{ stack: FormState[]; index: number; lastKey: string | null }>(
+    () => ({ stack: [buildInitial()], index: 0, lastKey: null }),
+  );
+  const form = hist.stack[hist.index];
+  const canUndo = hist.index > 0;
+  const canRedo = hist.index < hist.stack.length - 1;
+
+  const apply = (patch: Partial<FormState>, coalesceKey: string | null = null) => {
+    setHist((h) => {
+      const cur = h.stack[h.index];
+      const next = { ...cur, ...patch };
+      if (Object.keys(patch).every((k) => (cur as never)[k] === (next as never)[k])) return h;
+      let stack = h.stack.slice(0, h.index + 1);
+      if (coalesceKey && coalesceKey === h.lastKey) stack = stack.slice(0, -1);
+      stack = [...stack, next];
+      return { stack, index: stack.length - 1, lastKey: coalesceKey };
+    });
+  };
+  const undo = () => setHist((h) => (h.index > 0 ? { ...h, index: h.index - 1, lastKey: null } : h));
+  const redo = () =>
+    setHist((h) => (h.index < h.stack.length - 1 ? { ...h, index: h.index + 1, lastKey: null } : h));
+
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [notesOpen, setNotesOpen] = useState(
+    () => !!(reservation?.customerNotes || reservation?.staffNotes),
+  );
+  const [flash, setFlash] = useState('');
 
-  const set = (k: keyof typeof form, v: string | number) =>
-    setForm((f) => ({ ...f, [k]: v }));
+  const table = tables.find((t) => t.id === form.tableId);
+  const resourceText = table ? resourceLabel(restaurant, table) : 'No resource';
+  const duration = diffMinutes(form.startTime, form.endTime);
+  const notesCount = (form.customerNotes.trim() ? 1 : 0) + (form.staffNotes.trim() ? 1 : 0);
+  const fullName = `${form.name} ${form.surname}`.trim() || 'New reservation';
+
+  const flashMsg = (m: string) => {
+    setFlash(m);
+    setTimeout(() => setFlash(''), 1500);
+  };
 
   const save = async () => {
     setSaving(true);
@@ -74,24 +198,18 @@ export function ReservationModal({
     }
   };
 
-  // Quick status change (arrived → SEATED, left → COMPLETED) without leaving
-  // the modal.
-  const setStatusQuick = async (status: ReservationStatus) => {
-    if (!reservation) return;
+  const duplicate = async () => {
     setSaving(true);
     setError('');
     try {
-      const res = await api.updateReservation(reservation.id, { status });
-      onSaved(res.notifyCustomer, reservation.id);
+      await api.createReservation({ ...form, status: 'PENDING' });
+      onSaved(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to update');
+      setError(e instanceof Error ? e.message : 'Failed to duplicate');
       setSaving(false);
     }
   };
 
-  // Cancelling sets status = CANCELLED and keeps the reservation visible
-  // (struck-through) for the staff's records — it is NOT archived/hidden.
-  // Archiving/deleting is a separate admin-only action.
   const cancelReservation = async () => {
     if (!reservation) return;
     if (!confirm('Cancel this reservation? It stays visible (struck-through) for your records.')) return;
@@ -106,158 +224,234 @@ export function ReservationModal({
     }
   };
 
+  // Keyboard workflow — bound once, always reads latest actions via ref.
+  const actions = useRef<Record<string, () => void>>({});
+  actions.current = {
+    save,
+    duplicate,
+    undo,
+    redo,
+    close: onClose,
+    copy: () => {
+      copiedReservation = { ...form };
+      flashMsg('Reservation copied');
+    },
+    paste: () => {
+      if (copiedReservation) {
+        apply({ ...copiedReservation });
+        flashMsg('Pasted from copied reservation');
+      }
+    },
+  };
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const a = actions.current;
+      const target = e.target as HTMLElement;
+      const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      if (e.key === 'Escape') { a.close(); return; }
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? a.redo() : a.undo(); return; }
+      if (mod && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); a.redo(); return; }
+      if (mod && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); a.duplicate(); return; }
+      // Copy/paste only when not editing field text (so native copy still works there).
+      if (mod && (e.key === 'c' || e.key === 'C') && !inField) { e.preventDefault(); a.copy(); return; }
+      if (mod && (e.key === 'v' || e.key === 'V') && !inField) { e.preventDefault(); a.paste(); return; }
+      if (e.key === 'Enter' && target.tagName !== 'TEXTAREA') { e.preventDefault(); a.save(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
       <div
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto"
+        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
-          <h3 className="text-lg font-bold text-slate-800">
-            {isEdit ? 'Edit Reservation' : 'Manual Reservation'}
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 flex-shrink-0">
+          <h3 className="text-base font-bold text-slate-800">
+            {isEdit ? 'Reservation' : 'New Reservation'}
           </h3>
-          <button onClick={onClose} className="text-slate-400 hover:text-slate-600">
-            <FiX size={20} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={undo}
+              disabled={!canUndo}
+              title="Undo (Ctrl+Z)"
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-30"
+            >
+              <FiRotateCcw size={15} />
+            </button>
+            <button
+              onClick={redo}
+              disabled={!canRedo}
+              title="Redo (Ctrl+Shift+Z)"
+              className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600 disabled:opacity-30"
+            >
+              <FiRotateCw size={15} />
+            </button>
+            <button onClick={onClose} title="Close (Esc)" className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600">
+              <FiX size={18} />
+            </button>
+          </div>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* Section 1 — Guest Information */}
-          <Section title="Guest Information">
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="First name">
-                <input className="tb-input" value={form.name} onChange={(e) => set('name', e.target.value)} />
-              </Field>
-              <Field label="Surname">
-                <input className="tb-input" value={form.surname} onChange={(e) => set('surname', e.target.value)} />
-              </Field>
+        {/* Scrollable body */}
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+          {/* Summary card */}
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-lg font-bold text-slate-800 leading-tight">{fullName}</p>
+              {statusBadge(form.status)}
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Phone">
-                <input className="tb-input" value={form.phone} onChange={(e) => set('phone', e.target.value)} />
-              </Field>
-              <Field label="Guests">
-                <input
-                  type="number"
-                  min={1}
-                  className="tb-input"
-                  value={form.guests}
-                  onChange={(e) => set('guests', Number(e.target.value))}
-                />
-              </Field>
+            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+              <span className="inline-flex items-center gap-1.5"><FiUsers size={14} className="text-slate-400" /> {form.guests} {form.guests === 1 ? 'guest' : 'guests'}</span>
+              {form.phone && <span className="inline-flex items-center gap-1.5"><FiPhone size={14} className="text-slate-400" /> {form.phone}</span>}
+              <span className="inline-flex items-center gap-1.5"><FiMapPin size={14} className="text-slate-400" /> {resourceText}</span>
             </div>
-          </Section>
+            <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-sm text-slate-600">
+              <span className="inline-flex items-center gap-1.5"><FiCalendar size={14} className="text-slate-400" /> {shortDate(form.date)}</span>
+              <span className="inline-flex items-center gap-1.5"><FiClock size={14} className="text-slate-400" /> {form.startTime} → {form.endTime}</span>
+              <span className="text-slate-500">Duration: <span className="font-medium text-slate-700">{fmtDuration(duration)}</span></span>
+            </div>
+          </div>
 
-          {/* Section 2 — Reservation Details */}
-          <Section title="Reservation Details">
-            <Field label="Table">
-              <select className="tb-input" value={form.tableId} onChange={(e) => set('tableId', e.target.value)}>
-                <option value="">— No table —</option>
-                {tables.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    Table {t.number} ({t.capacity} seats)
-                  </option>
-                ))}
+          {/* Status quick actions */}
+          <div>
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Status</p>
+            <div className="flex flex-wrap gap-2">
+              {STATUS_ACTIONS.map((s) => (
+                <button
+                  key={s.value}
+                  onClick={() => apply({ status: s.value })}
+                  className={`px-3 py-1.5 rounded-lg text-sm font-medium border transition-colors ${
+                    form.status === s.value
+                      ? s.active
+                      : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                  }`}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Guest + contact */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="First name">
+              <input className="tb-input" value={form.name} onChange={(e) => apply({ name: e.target.value }, 'name')} />
+            </Field>
+            <Field label="Surname">
+              <input className="tb-input" value={form.surname} onChange={(e) => apply({ surname: e.target.value }, 'surname')} />
+            </Field>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Phone">
+              <input className="tb-input" value={form.phone} onChange={(e) => apply({ phone: e.target.value }, 'phone')} />
+            </Field>
+            <Field label="Guests">
+              <div className="flex items-center gap-2">
+                <button onClick={() => apply({ guests: Math.max(1, form.guests - 1) })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiMinus size={15} /></button>
+                <input type="number" min={1} className="tb-input text-center" value={form.guests} onChange={(e) => apply({ guests: Math.max(1, Number(e.target.value)) })} />
+                <button onClick={() => apply({ guests: form.guests + 1 })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiPlus size={15} /></button>
+              </div>
+            </Field>
+          </div>
+
+          {/* Resource */}
+          <Field label="Resource / table">
+            <select className="tb-input" value={form.tableId} onChange={(e) => apply({ tableId: e.target.value })}>
+              <option value="">— No resource —</option>
+              {tables.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {resourceLabel(restaurant, t)} ({t.capacity} seats)
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {/* Date + time */}
+          <div className="grid grid-cols-3 gap-3">
+            <Field label="Date">
+              <input type="date" className="tb-input" value={form.date} onChange={(e) => apply({ date: e.target.value })} />
+            </Field>
+            <Field label="Start">
+              <TimeInput value={form.startTime} onCommit={(v) => apply({ startTime: v })} />
+            </Field>
+            <Field label="End">
+              <TimeInput value={form.endTime} onCommit={(v) => apply({ endTime: v })} />
+            </Field>
+          </div>
+
+          {/* Duration shortcuts */}
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-slate-500">Extend:</span>
+            {DURATION_ADDS.map((n) => (
+              <button
+                key={n}
+                onClick={() => apply({ endTime: addMinutes(form.endTime, n) })}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-indigo-100 hover:text-indigo-700 text-slate-600 text-xs font-medium"
+              >
+                +{n}m
+              </button>
+            ))}
+          </div>
+
+          {/* Occasion + channel */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Occasion">
+              <select className="tb-input" value={form.occasion} onChange={(e) => apply({ occasion: e.target.value })}>
+                <option value="">—</option>
+                {OCCASIONS.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             </Field>
-            <div className="grid grid-cols-3 gap-3">
-              <Field label="Date">
-                <input type="date" className="tb-input" value={form.date} onChange={(e) => set('date', e.target.value)} />
-              </Field>
-              <Field label="Start">
-                <input type="time" className="tb-input" value={form.startTime} onChange={(e) => set('startTime', e.target.value)} />
-              </Field>
-              <Field label="End">
-                <input type="time" className="tb-input" value={form.endTime} onChange={(e) => set('endTime', e.target.value)} />
-              </Field>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Occasion">
-                <select className="tb-input" value={form.occasion} onChange={(e) => set('occasion', e.target.value)}>
-                  <option value="">—</option>
-                  {['Birthday', 'Anniversary', 'Graduation', 'Business Meeting', 'Date Night', 'Other'].map((o) => (
-                    <option key={o} value={o}>{o}</option>
-                  ))}
-                </select>
-              </Field>
-              <Field label="Booking channel">
-                <select className="tb-input" value={form.channel} onChange={(e) => set('channel', e.target.value)}>
-                  {RESERVATION_CHANNELS.map((c) => (
-                    <option key={c} value={c}>{channelMeta(c).label}</option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-          </Section>
-
-          {/* Section 3 — Status */}
-          <Section title="Status">
-            <Field label="Reservation status">
-              <select className="tb-input" value={form.status} onChange={(e) => set('status', e.target.value)}>
-                {RESERVATION_STATUSES.map((s) => (
-                  <option key={s} value={s}>{s.replace(/_/g, ' ')}</option>
-                ))}
+            <Field label="Booking channel">
+              <select className="tb-input" value={form.channel} onChange={(e) => apply({ channel: e.target.value as ReservationChannel })}>
+                {RESERVATION_CHANNELS.map((c) => <option key={c} value={c}>{channelMeta(c).label}</option>)}
               </select>
             </Field>
-          </Section>
+          </div>
 
-          {/* Section 4 — Notes */}
-          <Section title="Notes">
-            <Field label="Customer notes">
-              <textarea className="tb-input" rows={2} value={form.customerNotes} onChange={(e) => set('customerNotes', e.target.value)} />
-            </Field>
-            <Field label="Internal staff notes (never shown to customer)">
-              <textarea
-                className="tb-input bg-amber-50"
-                rows={2}
-                value={form.staffNotes}
-                onChange={(e) => set('staffNotes', e.target.value)}
-                placeholder="VIP customer, allergy, manager approval…"
-              />
-            </Field>
-          </Section>
+          {/* Notes (collapsed by default) */}
+          <div className="rounded-xl border border-slate-200">
+            <button
+              onClick={() => setNotesOpen((o) => !o)}
+              className="w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium text-slate-700"
+            >
+              <span>Notes ({notesCount})</span>
+              {notesOpen ? <FiChevronDown size={16} /> : <FiChevronRight size={16} />}
+            </button>
+            {notesOpen && (
+              <div className="px-3 pb-3 space-y-3">
+                <Field label="Customer notes">
+                  <textarea className="tb-input" rows={2} value={form.customerNotes} onChange={(e) => apply({ customerNotes: e.target.value }, 'customerNotes')} />
+                </Field>
+                <Field label="Internal staff notes (never shown to customer)">
+                  <textarea className="tb-input bg-amber-50" rows={2} value={form.staffNotes} onChange={(e) => apply({ staffNotes: e.target.value }, 'staffNotes')} placeholder="VIP customer, allergy, manager approval…" />
+                </Field>
+              </div>
+            )}
+          </div>
 
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
 
-        <div className="flex items-center justify-between px-6 py-4 border-t border-slate-100">
+        {/* Sticky footer — always visible */}
+        <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-slate-100 flex-shrink-0">
           {isEdit && form.status !== 'CANCELLED' ? (
             <button onClick={cancelReservation} className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 font-medium">
-              <FiTrash2 size={16} /> Cancel reservation
+              <FiTrash2 size={15} /> Cancel reservation
             </button>
           ) : (
-            <span />
+            <span className="text-xs text-slate-400">{flash}</span>
           )}
-          <div className="flex gap-2">
-            {isEdit && form.status === 'PENDING' && (
-              <button
-                onClick={() => setStatusQuick('CONFIRMED')}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-100 text-indigo-700 text-sm font-medium hover:bg-indigo-200 disabled:opacity-60"
-                title="Confirm reservation (notify the customer first)"
-              >
-                <FiBell size={16} /> Confirm
-              </button>
-            )}
-            {isEdit && !['SEATED', 'COMPLETED', 'CANCELLED'].includes(form.status) && (
-              <button
-                onClick={() => setStatusQuick('SEATED')}
-                disabled={saving}
-                className="flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-400 text-amber-950 text-sm font-medium hover:bg-amber-500 disabled:opacity-60"
-                title="Mark guest as arrived (seated)"
-              >
-                <FiUserCheck size={16} /> Arrived
-              </button>
-            )}
+          <div className="flex items-center gap-2">
+            {flash && (isEdit && form.status !== 'CANCELLED') && <span className="text-xs text-emerald-600">{flash}</span>}
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-300 text-slate-600 text-sm font-medium hover:bg-slate-50">
               Close
             </button>
-            <button
-              onClick={save}
-              disabled={saving}
-              className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-60"
-            >
-              {saving ? 'Saving…' : isEdit ? 'Save changes' : 'Create'}
+            <button onClick={save} disabled={saving} className="px-4 py-2 rounded-lg bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-60">
+              {saving ? 'Saving…' : isEdit ? 'Save Changes' : 'Create'}
             </button>
           </div>
         </div>
@@ -266,12 +460,29 @@ export function ReservationModal({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function TimeInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
+  const [raw, setRaw] = useState(value);
+  useEffect(() => setRaw(value), [value]);
+  const commit = () => {
+    const n = normalizeTime(raw, value);
+    setRaw(n);
+    if (n !== value) onCommit(n);
+  };
   return (
-    <section className="space-y-3">
-      <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{title}</h4>
-      {children}
-    </section>
+    <input
+      className="tb-input"
+      value={raw}
+      placeholder="18:30"
+      onChange={(e) => setRaw(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          e.stopPropagation(); // commit the time without triggering Save
+          commit();
+        }
+      }}
+    />
   );
 }
 

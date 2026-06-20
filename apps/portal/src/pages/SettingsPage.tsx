@@ -12,7 +12,8 @@ import {
 } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import type { MenuItem, RestaurantImage } from '../types';
+import type { MenuItem, ResourceMode, RestaurantImage } from '../types';
+import { ResourcesManager } from '../components/ResourcesManager';
 
 const CUISINES = [
   'georgian', 'asian', 'italian', 'seafood', 'sushi', 'pizza',
@@ -27,7 +28,7 @@ const PRICE_LEVELS = [
 ];
 const IMAGE_TYPES = ['COVER', 'INTERIOR', 'TERRACE', 'FOOD', 'BAR'] as const;
 
-type Tab = 'profile' | 'photos' | 'menu' | 'booking';
+type Tab = 'profile' | 'photos' | 'menu' | 'booking' | 'resources';
 
 export default function SettingsPage() {
   const { restaurant, refresh } = useAuth();
@@ -49,6 +50,7 @@ export default function SettingsPage() {
     allowTableSelection: true,
     autoConfirm: true,
     published: false,
+    resourceMode: 'FLOOR_PLAN' as ResourceMode,
   });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -83,6 +85,7 @@ export default function SettingsPage() {
       allowTableSelection: restaurant.allowTableSelection,
       autoConfirm: restaurant.reservationConfirmationPolicy?.autoConfirm !== false,
       published: restaurant.published,
+      resourceMode: restaurant.reservationRules?.resourceMode === 'RESOURCE_LIST' ? 'RESOURCE_LIST' : 'FLOOR_PLAN',
     });
     setImages(restaurant.images || []);
     setMenu(restaurant.menu || []);
@@ -125,6 +128,9 @@ export default function SettingsPage() {
         reservationConfirmationPolicy: form.autoConfirm
           ? { autoConfirm: true }
           : { autoConfirm: false, confirmationWindowMinutes: 15 },
+        // Preserve other reservationRules keys (durations, resourceMeta) and
+        // persist the chosen resource mode.
+        reservationRules: { ...(restaurant.reservationRules || {}), resourceMode: form.resourceMode },
       } as never);
       await refresh();
       setSaved(true);
@@ -202,6 +208,7 @@ export default function SettingsPage() {
     { key: 'photos', label: 'Photos' },
     { key: 'menu', label: 'Menu' },
     { key: 'booking', label: 'Booking & Visibility' },
+    { key: 'resources', label: 'Resources' },
   ];
 
   return (
@@ -445,6 +452,37 @@ export default function SettingsPage() {
       {/* ---- Booking & Visibility Tab ---- */}
       {tab === 'booking' && (
         <div className="space-y-4">
+          {/* Reservation Configuration — resource management mode */}
+          <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+            <h3 className="font-semibold text-slate-700">Reservation Configuration</h3>
+            <p className="text-xs text-slate-500">How you manage bookable resources and what customers can choose.</p>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {([
+                { v: 'FLOOR_PLAN' as ResourceMode, title: 'Floor Plan Mode', desc: 'Upload a floor plan, place tables, and let customers pick an exact table.' },
+                { v: 'RESOURCE_LIST' as ResourceMode, title: 'Resource List Mode', desc: 'List resources manually (tables, rooms, spaces). No floor plan; staff/auto-assign.' },
+              ]).map((opt) => (
+                <button
+                  key={opt.v}
+                  type="button"
+                  onClick={() => set('resourceMode', opt.v)}
+                  className={`text-left rounded-xl border p-4 transition-colors ${
+                    form.resourceMode === opt.v
+                      ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300'
+                      : 'border-slate-200 hover:border-indigo-300'
+                  }`}
+                >
+                  <p className="text-sm font-semibold text-slate-800">{opt.title}</p>
+                  <p className="text-xs text-slate-500 mt-1">{opt.desc}</p>
+                </button>
+              ))}
+            </div>
+            {form.resourceMode === 'RESOURCE_LIST' && (
+              <p className="text-xs text-indigo-600">
+                Manage your resources in the <span className="font-medium">Resources</span> tab. Customers won't pick a specific resource — staff assign them.
+              </p>
+            )}
+          </div>
+
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
             <h3 className="font-semibold text-slate-700">Hours</h3>
             <div className="grid grid-cols-3 gap-3">
@@ -479,6 +517,9 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      {/* ---- Resources Tab ---- */}
+      {tab === 'resources' && <ResourcesManager />}
     </div>
   );
 }
