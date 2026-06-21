@@ -28,7 +28,11 @@ interface Props {
   initial?: { tableId: string; startTime: string };
   defaultDuration?: number;
   onClose: () => void;
-  onSaved: (notify: boolean, id?: string) => void;
+  onSaved: (
+    notify: boolean,
+    id?: string,
+    history?: { before: Partial<Reservation>; after: Partial<Reservation> },
+  ) => void;
 }
 
 type FormState = {
@@ -181,13 +185,33 @@ export function ReservationModal({
     setTimeout(() => setFlash(''), 1500);
   };
 
+  // Diff the original reservation against the edited form so the scheduler can
+  // record one undoable history entry for everything changed in the modal.
+  const buildHistory = (): { before: Partial<Reservation>; after: Partial<Reservation> } | undefined => {
+    if (!reservation) return undefined;
+    const before: Record<string, unknown> = {};
+    const after: Record<string, unknown> = {};
+    const norm = (k: string, v: unknown) =>
+      k === 'tableId' ? (v || null) : k === 'guests' ? v : (v ?? '');
+    (['date', 'startTime', 'endTime', 'tableId', 'status', 'guests', 'name', 'surname', 'phone', 'occasion', 'customerNotes', 'staffNotes', 'channel'] as const).forEach((k) => {
+      const a = norm(k, (reservation as unknown as Record<string, unknown>)[k]);
+      const b = norm(k, (form as unknown as Record<string, unknown>)[k]);
+      if (a !== b) {
+        before[k] = a;
+        after[k] = b;
+      }
+    });
+    return Object.keys(after).length ? { before, after } : undefined;
+  };
+
   const save = async () => {
     setSaving(true);
     setError('');
     try {
       if (isEdit) {
+        const history = buildHistory();
         const res = await api.updateReservation(reservation!.id, form);
-        onSaved(res.notifyCustomer, reservation!.id);
+        onSaved(res.notifyCustomer, reservation!.id, history);
       } else {
         await api.createReservation(form);
         onSaved(false);
@@ -216,8 +240,13 @@ export function ReservationModal({
     setSaving(true);
     setError('');
     try {
+      const wasNot = reservation.status !== 'CANCELLED';
       const res = await api.updateReservation(reservation.id, { status: 'CANCELLED' });
-      onSaved(res.notifyCustomer, reservation.id);
+      onSaved(
+        res.notifyCustomer,
+        reservation.id,
+        wasNot ? { before: { status: reservation.status }, after: { status: 'CANCELLED' } } : undefined,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to cancel');
       setSaving(false);

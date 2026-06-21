@@ -127,34 +127,60 @@ export class RestaurantsService {
     return this.findOneForStaff(id);
   }
 
-  /** Replace tables for a restaurant. */
+  /** Reconcile the restaurant's tables to the supplied set. We update existing
+   *  tables in place, create new ones, and delete only the ones that were
+   *  removed — rather than wiping & recreating. This preserves each kept table's
+   *  id and, crucially, its reservations' `tableId` (a full delete would fire
+   *  onDelete: SetNull and unassign every booking). Only genuinely-removed
+   *  tables detach their reservations. Shared by the Floor Plan builder and the
+   *  Resources page, so both stay in sync on the same Table rows. */
   async setTables(
     id: string,
     userRestaurantId: string | undefined,
     tables: any[],
   ) {
     this.assertOwnership(id, userRestaurantId);
+    const fields = (t: any) => ({
+      number: t.number,
+      capacity: t.capacity,
+      shape: t.shape ?? 'CIRCLE',
+      zoneId: t.zoneId ?? null,
+      tags: t.tags ?? [],
+      mergeGroup: t.mergeGroup ?? null,
+      posX: t.position?.x ?? t.posX ?? 50,
+      posY: t.position?.y ?? t.posY ?? 50,
+      width: t.size?.width ?? t.width ?? 8,
+      height: t.size?.height ?? t.height ?? 8,
+      rotation: t.rotation ?? 0,
+    });
     await this.prisma.$transaction(async (tx) => {
-      // Detaching reservations from removed tables happens via SetNull on delete.
-      await tx.table.deleteMany({ where: { restaurantId: id } });
+      const existing = await tx.table.findMany({
+        where: { restaurantId: id },
+        select: { id: true },
+      });
+      const existingIds = new Set(existing.map((t) => t.id));
+      const incomingIds = new Set<string>();
+
       for (const t of tables) {
-        await tx.table.create({
-          data: {
-            id: t.id,
-            restaurantId: id,
-            number: t.number,
-            capacity: t.capacity,
-            shape: t.shape ?? 'CIRCLE',
-            zoneId: t.zoneId ?? null,
-            tags: t.tags ?? [],
-            mergeGroup: t.mergeGroup ?? null,
-            posX: t.position?.x ?? t.posX ?? 50,
-            posY: t.position?.y ?? t.posY ?? 50,
-            width: t.size?.width ?? t.width ?? 8,
-            height: t.size?.height ?? t.height ?? 8,
-            rotation: t.rotation ?? 0,
-          },
-        });
+        const data = fields(t);
+        // Reuse the incoming id when present; only fall back to a generated id
+        // for brand-new tables that arrive without one.
+        if (t.id && existingIds.has(t.id)) {
+          incomingIds.add(t.id);
+          await tx.table.update({ where: { id: t.id }, data });
+        } else {
+          const created = await tx.table.create({
+            data: { ...data, id: t.id || undefined, restaurantId: id },
+          });
+          incomingIds.add(created.id);
+        }
+      }
+
+      // Delete only tables that are no longer present (these detach their
+      // reservations via SetNull, which is the desired behaviour on removal).
+      const toDelete = [...existingIds].filter((eid) => !incomingIds.has(eid));
+      if (toDelete.length) {
+        await tx.table.deleteMany({ where: { id: { in: toDelete } } });
       }
     });
     return this.findOneForStaff(id);

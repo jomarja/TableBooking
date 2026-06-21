@@ -111,8 +111,29 @@ Restaurants can manage resources as a floor plan **or** a manual list (tables / 
 
 **Optional follow-ups** (not done): auto-assign a free resource at booking time (`createCustomer` accepts optional `tableId`; pick via availability) instead of leaving it for staff; the small **resource-type badge** (TABLE/ROOM/VIP/CONFERENCE — spec called it "future"); and promoting `resourceMeta` to real `Table.name`/`description` columns during a migration window (also apply the pending `remove_google_import` migration then — see §3.1).
 
-### 3.5 Next feature requested by the owner
-**Reservation modal usability redesign** — functional but "too form-heavy for restaurant staff workflows." Wants a faster, less form-like edit experience. (Not started.)
+### 3.5 ✅ Reservation modal redesign — DONE
+`apps/portal/src/components/ReservationModal.tsx` rebuilt for speed/low cognitive load:
+- **Summary card** at top (name + status badge; guests, phone, resource; date, time range, duration) — understand the booking at a glance.
+- **One-click status actions** (Pending / Confirmed / Arrived[=SEATED] / Completed / Cancelled), current highlighted — no dropdown.
+- **Smart time inputs**: `normalizeTime` parses `18`→18:00, `1830`→18:30, `9`→09:00, `18:45`→18:45 on blur/Enter. **Extend** chips +30m/+60m/+90m/+120m bump the end time.
+- **Undo/redo** (`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`, plus header buttons) over all fields — history with per-field coalescing so typing is one step.
+- **Copy/Duplicate**: `Ctrl+C` copies the reservation (module-level clipboard), `Ctrl+V` pastes into a draft, `Ctrl+D` duplicates (creates a PENDING copy via API).
+- **Notes collapsed** by default (`Notes (n)` toggle).
+- **Sticky footer** (flex-col modal: header / scroll body / footer) — Cancel reservation · Close · Save Changes always visible.
+- **Keyboard**: `Esc` close, `Enter` save (except in textarea / time field), native Tab order.
+- Verified live in the :5180 preview: layout, status→badge, +60m→end extend, undo/redo (CONFIRMED→COMPLETED→undo→CONFIRMED→redo→COMPLETED). Time-normalization-on-blur and the copy/paste/duplicate shortcuts are standard handlers verified by code review (the preview tool can't simulate real blur / clipboard).
+
+### 3.6 ✅ Scheduler undo/redo — DONE
+Session-only undo/redo for the **whole scheduler** (separate from the modal's field-level undo), in `ReservationsPage.tsx`:
+- Global **`Ctrl+Z` / `Ctrl+Shift+Z` / `Ctrl+Y`** (gated off while a modal is open or while typing in a control, so it doesn't clash with the modal's own undo).
+- A `{ stack, index }` history (depth `HISTORY_LIMIT = 50`). Each entry is `{ id, before, after, label }` (exact field snapshots). `applyState(id, fields)` optimistically updates local `reservations` then PATCHes — used for the forward edit **and** undo/redo, so undo is instant, works before backend sync, and restores the exact state with **no collision logic** (undo always succeeds).
+- Records one entry per finished action: **drag move / resize** (in `onPointerUp`, via the `onHistory` prop — refactored to run side-effects outside the `setPreview` updater + a `previewRef`), **status changes** (`setStatus`), and **modal saves/cancel** (the modal computes a `before/after` diff via `buildHistory()` and passes it through `onSaved(notify, id, history)`).
+- **Toast** (bottom-center) after each action with an inline **Undo**/**Redo** button; auto-dismiss ~5s.
+- Verified live in the :5180 preview: status change → "Status updated" toast, `Ctrl+Z` → "Undone", `Ctrl+Y` → reapplied; no console errors.
+
+### 3.7 ✅ `setTables` reconcile fix — tables unified, bookings preserved
+**Bug:** `RestaurantsService.setTables` did `deleteMany` + recreate. Deleting tables fires `onDelete: SetNull` on `Reservation.tableId`, so **every table edit — from the Resources page or a Floor Plan save — unassigned every reservation** (they vanished from the scheduler). Newly added resources persisted but bookings were silently orphaned.
+**Fix** (`server/src/restaurants/restaurants.service.ts`): `setTables` now **reconciles** — update existing tables in place (matched by id), create new ones, delete only the ones removed. Kept tables retain their id, so reservations stay assigned; only genuinely-removed tables detach their bookings (intended). Resources page, scheduler, and floor plan all operate on the same `Table` rows via this one method, so they stay in sync and add/delete propagates both ways. Verified by direct API test (reservation `tableId` preserved across a table add + remove) and in the preview (added resource shows as a new scheduler row; assignments intact).
 
 ---
 

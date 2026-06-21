@@ -80,7 +80,9 @@ export default function BlockedPeriodsPage() {
   const [date, setDate] = useState(todayStr());
   // form modal: null = closed, 'new' = create, object = edit
   const [editing, setEditing] = useState<BlockedPeriod | 'new' | null>(null);
-  const [menuFor, setMenuFor] = useState<string | null>(null);
+  // Context menu anchored to the clicked ⋮ button (fixed-positioned so it
+  // escapes the table card's overflow-hidden clipping).
+  const [menu, setMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const now = Date.now();
 
   const load = useCallback(async () => {
@@ -157,7 +159,7 @@ export default function BlockedPeriodsPage() {
   }, [blocks, filter, date, now]);
 
   const duplicate = async (b: BlockedPeriod) => {
-    setMenuFor(null);
+    setMenu(null);
     await api.createBlocked({
       scope: b.scope,
       tableIds: b.tableIds,
@@ -172,7 +174,7 @@ export default function BlockedPeriodsPage() {
     await load();
   };
   const remove = async (b: BlockedPeriod) => {
-    setMenuFor(null);
+    setMenu(null);
     if (!confirm('Delete this blocked period?')) return;
     await api.deleteBlocked(b.id);
     await load();
@@ -300,39 +302,18 @@ export default function BlockedPeriodsPage() {
                         {st.label}
                       </span>
                     </td>
-                    <td className="px-3 py-3 text-right relative">
+                    <td className="px-3 py-3 text-right">
                       <button
-                        onClick={() => setMenuFor(menuFor === b.id ? null : b.id)}
+                        onClick={(e) => {
+                          if (menu?.id === b.id) { setMenu(null); return; }
+                          const r = e.currentTarget.getBoundingClientRect();
+                          setMenu({ id: b.id, x: r.right, y: r.bottom + 4 });
+                        }}
                         className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
                         title="Actions"
                       >
                         <FiMoreVertical size={16} />
                       </button>
-                      {menuFor === b.id && (
-                        <>
-                          <div className="fixed inset-0 z-40" onClick={() => setMenuFor(null)} />
-                          <div className="absolute right-3 top-10 z-50 w-40 bg-white rounded-lg shadow-xl border border-slate-200 py-1 text-sm text-left">
-                            <button
-                              onClick={() => { setMenuFor(null); setEditing(b); }}
-                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
-                            >
-                              <FiEdit2 size={14} /> Edit
-                            </button>
-                            <button
-                              onClick={() => duplicate(b)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
-                            >
-                              <FiCopy size={14} /> Duplicate
-                            </button>
-                            <button
-                              onClick={() => remove(b)}
-                              className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600"
-                            >
-                              <FiTrash2 size={14} /> Delete
-                            </button>
-                          </div>
-                        </>
-                      )}
                     </td>
                   </tr>
                 );
@@ -341,6 +322,40 @@ export default function BlockedPeriodsPage() {
           </table>
         )}
       </div>
+
+      {/* Row actions menu — fixed so it's never clipped by the table card. */}
+      {menu && (() => {
+        const b = blocks.find((x) => x.id === menu.id);
+        if (!b) return null;
+        return (
+          <>
+            <div className="fixed inset-0 z-40" onClick={() => setMenu(null)} />
+            <div
+              className="fixed z-50 w-40 bg-white rounded-lg shadow-xl border border-slate-200 py-1 text-sm"
+              style={{ left: Math.max(8, menu.x - 160), top: Math.min(menu.y, window.innerHeight - 132) }}
+            >
+              <button
+                onClick={() => { setMenu(null); setEditing(b); }}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+              >
+                <FiEdit2 size={14} /> Edit
+              </button>
+              <button
+                onClick={() => duplicate(b)}
+                className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+              >
+                <FiCopy size={14} /> Duplicate
+              </button>
+              <button
+                onClick={() => remove(b)}
+                className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600"
+              >
+                <FiTrash2 size={14} /> Delete
+              </button>
+            </div>
+          </>
+        );
+      })()}
 
       {editing && (
         <BlockForm

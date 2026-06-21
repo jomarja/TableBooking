@@ -9,6 +9,14 @@ import { resourceLabel } from '../lib/resources';
 
 type View = 'day' | 'week' | 'table';
 
+// One undoable scheduler action: restore `before` to undo, `after` to redo.
+type HistoryEntry = {
+  id: string;
+  before: Partial<Reservation>;
+  after: Partial<Reservation>;
+  label: string;
+};
+
 const DEFAULT_OPEN = 10 * 60; // fallback opening time if restaurant has none
 const DEFAULT_CLOSE = 23 * 60; // fallback closing time
 const DEFAULT_DURATION = 120; // default reservation length in minutes
@@ -16,6 +24,7 @@ const DEFAULT_PX_PER_HOUR = 90;
 const MIN_PX_PER_HOUR = 44;
 const MAX_PX_PER_HOUR = 220;
 const ROW_H = 64;
+const HISTORY_LIMIT = 50; // scheduler undo/redo stack depth (session-only)
 const MIN_PER_DAY = 24 * 60;
 const AUTOSCROLL_EDGE = 56; // px from top/bottom edge that triggers auto-scroll while dragging
 const AUTOSCROLL_MAX = 20; // max auto-scroll speed in px per frame
@@ -251,19 +260,108 @@ export default function ReservationsPage() {
     [blocksForDate, tables],
   );
 
-  const onSaved = async () => {
+  // ---- Scheduler undo/redo (session-only history) ----
+  const [hist, setHist] = useState<{ stack: HistoryEntry[]; index: number }>({ stack: [], index: -1 });
+  const histRef = useRef(hist);
+  histRef.current = hist;
+  const [toast, setToast] = useState<{ msg: string; action?: { label: string; run: () => void } } | null>(null);
+  const [toastShown, setToastShown] = useState(false); // drives the fade in/out
+  const toastHideTimer = useRef<number | null>(null);
+  const toastUnmountTimer = useRef<number | null>(null);
+  const undoRef = useRef<() => void>(() => {});
+  const redoRef = useRef<() => void>(() => {});
+
+  const showToast = useCallback(
+    (msg: string, action?: { label: string; run: () => void }) => {
+      if (toastHideTimer.current) clearTimeout(toastHideTimer.current);
+      if (toastUnmountTimer.current) clearTimeout(toastUnmountTimer.current);
+      setToast({ msg, action });
+      // mount hidden, then fade in next frame; fade out at 2.2s, unmount at 2.6s
+      setToastShown(false);
+      requestAnimationFrame(() => setToastShown(true));
+      toastHideTimer.current = window.setTimeout(() => setToastShown(false), 2200);
+      toastUnmountTimer.current = window.setTimeout(() => setToast(null), 2600);
+    },
+    [],
+  );
+
+  // Optimistically apply field changes to a reservation, then persist. Used for
+  // the forward edit AND undo/redo — restores the exact state, no collision
+  // logic, so undo always succeeds and feels instant (works before sync).
+  const applyState = useCallback(
+    (id: string, fields: Partial<Reservation>) => {
+      setReservations((rs) => rs.map((r) => (r.id === id ? ({ ...r, ...fields } as Reservation) : r)));
+      void api.updateReservation(id, fields).catch(() => void load());
+    },
+    [load],
+  );
+
+  const recordAction = useCallback(
+    (entry: HistoryEntry) => {
+      setHist((h) => {
+        const stack = [...h.stack.slice(0, h.index + 1), entry].slice(-HISTORY_LIMIT);
+        return { stack, index: stack.length - 1 };
+      });
+      showToast(entry.label, { label: 'Undo', run: () => undoRef.current() });
+    },
+    [showToast],
+  );
+
+  const undo = useCallback(() => {
+    const h = histRef.current;
+    if (h.index < 0) return;
+    const entry = h.stack[h.index];
+    applyState(entry.id, entry.before);
+    setHist((s) => ({ ...s, index: s.index - 1 }));
+    showToast('Undone', { label: 'Redo', run: () => redoRef.current() });
+  }, [applyState, showToast]);
+  undoRef.current = undo;
+
+  const redo = useCallback(() => {
+    const h = histRef.current;
+    if (h.index >= h.stack.length - 1) return;
+    const entry = h.stack[h.index + 1];
+    applyState(entry.id, entry.after);
+    setHist((s) => ({ ...s, index: s.index + 1 }));
+    showToast(entry.label, { label: 'Undo', run: () => undoRef.current() });
+  }, [applyState, showToast]);
+  redoRef.current = redo;
+
+  // Global Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y — disabled while a modal is open (the
+  // modal has its own field-level undo) or while typing in a control.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (editing || creating) return;
+      const t = e.target as HTMLElement;
+      if (/^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z' && !e.shiftKey) { e.preventDefault(); undoRef.current(); }
+      else if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redoRef.current(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, creating]);
+
+  const onSaved = async (
+    _notify?: boolean,
+    id?: string,
+    history?: { before: Partial<Reservation>; after: Partial<Reservation> },
+  ) => {
     setEditing(null);
     setCreating(false);
+    if (history && id) recordAction({ id, before: history.before, after: history.after, label: 'Reservation updated' });
     await load();
   };
 
-  // Quick status changes straight from the timeline (no modal).
+  // Quick status changes straight from the timeline (no modal) — undoable.
   const setStatus = useCallback(
-    async (r: Reservation, status: Reservation['status']) => {
-      await api.updateReservation(r.id, { status });
-      await load();
+    (r: Reservation, status: Reservation['status']) => {
+      if (r.status === status) return;
+      applyState(r.id, { status });
+      recordAction({ id: r.id, before: { status: r.status }, after: { status }, label: 'Status updated' });
     },
-    [load],
+    [applyState, recordAction],
   );
 
   return (
@@ -360,6 +458,7 @@ export default function ReservationsPage() {
           showNow={showNowLine}
           onEdit={setEditing}
           onChanged={onSaved}
+          onHistory={recordAction}
           onConfirm={(r) => setStatus(r, 'CONFIRMED')}
           onArrive={(r) => setStatus(r, 'SEATED')}
           onComplete={(r) => setStatus(r, 'COMPLETED')}
@@ -394,6 +493,29 @@ export default function ReservationsPage() {
           onSaved={onSaved}
         />
       )}
+
+      {/* Undo/redo toast — translucent, auto-fades out (fixed: no layout impact) */}
+      {toast && (
+        <div
+          className={`fixed bottom-6 left-1/2 z-50 flex items-center gap-3 rounded-lg px-4 py-2 text-sm text-white/95 bg-slate-900/70 backdrop-blur-sm shadow-md pointer-events-none -translate-x-1/2 transition-all duration-300 ease-out ${
+            toastShown ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-2'
+          }`}
+        >
+          <span>{toast.msg}</span>
+          {toast.action && (
+            <button
+              onClick={() => {
+                const run = toast.action!.run;
+                setToast(null);
+                run();
+              }}
+              className="pointer-events-auto font-semibold text-indigo-300 hover:text-indigo-200"
+            >
+              {toast.action.label}
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,6 +548,7 @@ function TableScheduler({
   showNow,
   onEdit,
   onChanged,
+  onHistory,
   onConfirm,
   onArrive,
   onComplete,
@@ -442,6 +565,7 @@ function TableScheduler({
   showNow: boolean;
   onEdit: (r: Reservation) => void;
   onChanged: (notify: boolean, id?: string) => void;
+  onHistory: (entry: HistoryEntry) => void;
   onConfirm: (r: Reservation) => void;
   onArrive: (r: Reservation) => void;
   onComplete: (r: Reservation) => void;
@@ -588,6 +712,8 @@ function TableScheduler({
     tableId: string | null;
     valid: boolean; // false when the current spot overlaps another booking
   } | null>(null);
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
   // Right-click context menu (quick actions) anchored at the cursor.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; res: Reservation } | null>(null);
 
@@ -904,78 +1030,98 @@ function TableScheduler({
     if (!drag) return;
     dragRef.current = null;
 
-    setPreview((prev) => {
-      if (!prev || prev.id !== drag.id) return null;
-      const res = reservations.find((r) => r.id === drag.id);
-      if (!res) return null;
-      // Snap to the 15-minute grid now, on release (kept free during the drag),
-      // and resolve any overlap so the result is always collision-free.
-      const hi = Math.min(rangeEnd, maxAbs);
-      let snapStart: number, snapEnd: number;
-      if (prev.mode === 'move') {
-        const dur = prev.end - prev.start;
-        const desired = Math.max(rangeStart, Math.min(snap(prev.start), hi - dur));
-        const resolved = resolvePlacement(prev.tableId, desired, dur, drag.id);
-        if (resolved == null) return null; // table is full → cancel the move
-        snapStart = resolved;
-        snapEnd = snapStart + dur;
+    const prev = previewRef.current;
+    setPreview(null);
+    if (!prev || prev.id !== drag.id) return;
+    const res = reservations.find((r) => r.id === drag.id);
+    if (!res) return;
+
+    // Snap to the 15-minute grid now, on release (kept free during the drag),
+    // and resolve any overlap so the result is always collision-free.
+    const hi = Math.min(rangeEnd, maxAbs);
+    let snapStart: number, snapEnd: number;
+    if (prev.mode === 'move') {
+      const dur = prev.end - prev.start;
+      const desired = Math.max(rangeStart, Math.min(snap(prev.start), hi - dur));
+      const resolved = resolvePlacement(prev.tableId, desired, dur, drag.id);
+      if (resolved == null) return; // table is full → cancel the move
+      snapStart = resolved;
+      snapEnd = snapStart + dur;
+    } else {
+      const occ = occupiedOn(prev.tableId, drag.id);
+      if (drag.edge === 'start') {
+        const prevEnd = Math.max(rangeStart, ...occ.filter((o) => o.end <= prev.end).map((o) => o.end));
+        snapEnd = prev.end;
+        snapStart = Math.min(snapEnd - 15, Math.max(prevEnd, snap(prev.start)));
       } else {
-        const occ = occupiedOn(prev.tableId, drag.id);
-        if (drag.edge === 'start') {
-          const prevEnd = Math.max(rangeStart, ...occ.filter((o) => o.end <= prev.end).map((o) => o.end));
-          snapEnd = prev.end;
-          snapStart = Math.min(snapEnd - 15, Math.max(prevEnd, snap(prev.start)));
-        } else {
-          const nextStart = Math.min(hi, ...occ.filter((o) => o.start >= prev.start).map((o) => o.start));
-          snapStart = prev.start;
-          snapEnd = Math.max(snapStart + 15, Math.min(nextStart, snap(prev.end)));
-        }
+        const nextStart = Math.min(hi, ...occ.filter((o) => o.start >= prev.start).map((o) => o.start));
+        snapStart = prev.start;
+        snapEnd = Math.max(snapStart + 15, Math.min(nextStart, snap(prev.end)));
       }
-      const { date: newDate, baseAbs } = absToParts(snapStart);
-      const newStart = minToLabel(snapStart - baseAbs);
-      const newEnd = minToLabel(snapEnd - baseAbs);
-      const newTableId = prev.tableId;
-      if (
-        newDate === res.date &&
-        newStart === res.startTime &&
-        newEnd === res.endTime &&
-        newTableId === res.tableId
-      )
-        return null;
+    }
+    const { date: newDate, baseAbs } = absToParts(snapStart);
+    const newStart = minToLabel(snapStart - baseAbs);
+    const newEnd = minToLabel(snapEnd - baseAbs);
+    const newTableId = prev.tableId;
+    if (
+      newDate === res.date &&
+      newStart === res.startTime &&
+      newEnd === res.endTime &&
+      newTableId === res.tableId
+    )
+      return;
 
-      // Moving a reservation sends it back to PENDING (it needs the customer to
-      // be re-notified and re-confirmed) — unless it's already in a terminal /
-      // in-progress state we shouldn't disturb: seated guests stay seated and
-      // completed/cancelled bookings keep their (sticky gray / muted) status.
-      const resetToPending = !['SEATED', 'COMPLETED', 'CANCELLED'].includes(res.status);
+    // Moving a reservation sends it back to PENDING (it needs the customer to
+    // be re-notified and re-confirmed) — unless it's already in a terminal /
+    // in-progress state we shouldn't disturb: seated guests stay seated and
+    // completed/cancelled bookings keep their (sticky gray / muted) status.
+    const resetToPending = !['SEATED', 'COMPLETED', 'CANCELLED'].includes(res.status);
 
-      // Optimistic commit so block stays at dropped position during the API call
-      setOverrides((o) => ({
-        ...o,
-        [drag.id]: { start: snapStart, end: snapEnd, tableId: newTableId },
-      }));
+    // Optimistic commit so block stays at the dropped position during the call.
+    setOverrides((o) => ({
+      ...o,
+      [drag.id]: { start: snapStart, end: snapEnd, tableId: newTableId },
+    }));
 
-      api
-        .updateReservation(res.id, {
-          date: newDate,
-          startTime: newStart,
-          endTime: newEnd,
-          ...(newTableId !== res.tableId ? { tableId: newTableId ?? undefined } : {}),
-          ...(resetToPending ? { status: 'PENDING' as const } : {}),
-        })
-        .then((result) => {
-          onChanged(result.notifyCustomer, res.id);
-        })
-        .finally(() => {
-          setOverrides((o) => {
-            const next = { ...o };
-            delete next[drag.id];
-            return next;
-          });
-        });
-      return null;
+    // Record an undoable history entry (exact before → after).
+    onHistory({
+      id: res.id,
+      before: {
+        date: res.date,
+        startTime: res.startTime,
+        endTime: res.endTime,
+        tableId: res.tableId,
+        status: res.status,
+      },
+      after: {
+        date: newDate,
+        startTime: newStart,
+        endTime: newEnd,
+        tableId: newTableId,
+        ...(resetToPending ? { status: 'PENDING' as const } : { status: res.status }),
+      },
+      label: prev.mode === 'resize' ? 'Reservation resized' : 'Reservation moved',
     });
-  }, [reservations, onChanged, absToParts, rangeStart, rangeEnd, maxAbs, resolvePlacement, occupiedOn]);
+
+    api
+      .updateReservation(res.id, {
+        date: newDate,
+        startTime: newStart,
+        endTime: newEnd,
+        ...(newTableId !== res.tableId ? { tableId: newTableId ?? undefined } : {}),
+        ...(resetToPending ? { status: 'PENDING' as const } : {}),
+      })
+      .then((result) => {
+        onChanged(result.notifyCustomer, res.id);
+      })
+      .finally(() => {
+        setOverrides((o) => {
+          const next = { ...o };
+          delete next[drag.id];
+          return next;
+        });
+      });
+  }, [reservations, onChanged, onHistory, absToParts, rangeStart, rangeEnd, maxAbs, resolvePlacement, occupiedOn]);
 
   useEffect(() => {
     window.addEventListener('pointermove', onPointerMove);
