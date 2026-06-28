@@ -6,12 +6,61 @@ import {
   serializeReservationFull,
 } from '../common/serializers';
 
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const addDays = (date: string, n: number): string => {
+  const d = new Date(date + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+};
+const weekdayOf = (date: string): string =>
+  WEEKDAYS[new Date(date + 'T00:00:00Z').getUTCDay()];
+
 @Injectable()
 export class DashboardService {
   constructor(
     private prisma: PrismaService,
     private recurrence: RecurrenceService,
   ) {}
+
+  /** 7-day demand overview (Today, Tomorrow, …) for the dashboard cards. */
+  async weekOverview(restaurantId: string, from?: string) {
+    const start = from || new Date().toISOString().slice(0, 10);
+    const end = addDays(start, 6);
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+    });
+    const restDays: string[] = (restaurant?.restDays as any) ?? [];
+    const holidays: any[] = (restaurant?.holidayClosures as any) ?? [];
+    const reservations = await this.prisma.reservation.findMany({
+      where: {
+        restaurantId,
+        date: { gte: start, lte: end },
+        isArchived: false,
+        status: { notIn: ['CANCELLED'] },
+      },
+    });
+    const days: {
+      date: string;
+      weekday: string;
+      reservations: number;
+      guests: number;
+      closed: boolean;
+    }[] = [];
+    for (let i = 0; i < 7; i++) {
+      const date = addDays(start, i);
+      const dayRes = reservations.filter((r) => r.date === date);
+      const closed =
+        holidays.some((h) => h?.date === date) || restDays.includes(weekdayOf(date));
+      days.push({
+        date,
+        weekday: weekdayOf(date),
+        reservations: dayRes.length,
+        guests: dayRes.reduce((s, r) => s + r.guests, 0),
+        closed,
+      });
+    }
+    return { from: start, days };
+  }
 
   /** Operations-view summary for a restaurant on a given date (defaults to today). */
   async summary(restaurantId: string, date?: string) {
@@ -42,6 +91,13 @@ export class DashboardService {
       },
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
       take: 10,
+    });
+
+    // Online reservations awaiting staff approval (the dashboard queue).
+    const pendingOnline = await this.prisma.reservation.findMany({
+      where: { restaurantId, isArchived: false, status: 'PENDING', date: { gte: day } },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
     });
 
     const allBlocks = await this.prisma.blockedPeriod.findMany({
@@ -98,6 +154,7 @@ export class DashboardService {
       },
       todayReservations: reservations.map(serializeReservationFull),
       upcomingReservations: upcoming.map(serializeReservationFull),
+      pendingOnline: pendingOnline.map(serializeReservationFull),
       blockedToday: todayBlocks.map(serializeBlockedPeriod),
       recentActivity: recentEvents.map((e) => ({
         id: e.id,

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import { FiX } from 'react-icons/fi';
 import { api } from '../api/client';
+import { NumberField } from './NumberField';
+import { Select } from './Select';
 
 interface Props {
   onClose: () => void;
@@ -16,6 +18,8 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
     ownerName: '',
     ownerPassword: 'password',
   });
+  const [rating, setRating] = useState(0);
+  const [priceRange, setPriceRange] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -29,7 +33,7 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
     }
     setSaving(true);
     try {
-      await api.createRestaurant(form);
+      await api.createRestaurant({ ...form, rating, priceRange });
       onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to create');
@@ -38,8 +42,11 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h3 className="text-lg font-bold text-slate-800">Create Restaurant Account</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><FiX size={20} /></button>
@@ -54,12 +61,24 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
           <div className="grid grid-cols-2 gap-3">
             <Field label="Restaurant name *"><input className="tb-input" value={form.name} onChange={(e) => set('name', e.target.value)} /></Field>
             <Field label="Cuisine">
-              <select className="tb-input" value={form.cuisine} onChange={(e) => set('cuisine', e.target.value)}>
-                {['georgian', 'asian', 'italian', 'seafood', 'sushi', 'pizza', 'burgers', 'vegan'].map((c) => <option key={c}>{c}</option>)}
-              </select>
+              <Select
+                className="w-full"
+                ariaLabel="Cuisine"
+                value={form.cuisine}
+                onChange={(v) => set('cuisine', v)}
+                options={['georgian', 'asian', 'italian', 'seafood', 'sushi', 'pizza', 'burgers', 'vegan'].map((c) => ({ value: c, label: c }))}
+              />
             </Field>
           </div>
           <Field label="Address"><input className="tb-input" value={form.address} onChange={(e) => set('address', e.target.value)} /></Field>
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Rating (0–5)">
+              <NumberField className="tb-input" min={0} max={5} step={0.1} value={rating} onChange={setRating} />
+            </Field>
+            <Field label="Price range">
+              <input className="tb-input" placeholder="e.g. ₾30-₾60" value={priceRange} onChange={(e) => setPriceRange(e.target.value)} />
+            </Field>
+          </div>
 
           <hr className="border-slate-100" />
           <p className="text-xs font-semibold text-slate-500 uppercase">Owner account</p>

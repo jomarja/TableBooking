@@ -98,7 +98,12 @@ export function serializeRestaurant(r: any) {
     images,
     menu: (r.menu ?? []).map(serializeMenuItem),
     zones: (r.zones ?? []).map(serializeZone),
-    tables: (r.tables ?? []).map(serializeTable),
+    // minCapacity is stored per-table in reservationRules.resourceMeta (no
+    // migration); merge it onto each table so the customer + scheduler see it.
+    tables: (r.tables ?? []).map((t: any) => ({
+      ...serializeTable(t),
+      minCapacity: (r.reservationRules as any)?.resourceMeta?.[t.id]?.minCapacity ?? null,
+    })),
     floorPlan: {
       background: r.floorPlanBackground ?? null,
       elements: (r.floorPlanElements ?? []).map(serializeElement),
@@ -143,6 +148,8 @@ export function serializeReservationFull(res: any) {
     status: res.status,
     createdAt: res.createdAt,
     events: res.events ?? undefined,
+    // Latest event's actor (queries that include events order them desc).
+    lastEditedBy: res.events?.[0]?.user ?? null,
   };
 }
 

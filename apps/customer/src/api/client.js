@@ -27,6 +27,19 @@ export const api = {
   getRestaurant: (id) => request(`/restaurants/${id}`),
   getAvailability: (id, date) =>
     request(`/restaurants/${id}/availability?date=${encodeURIComponent(date)}`),
+  // Per-restaurant availability status for one date (list filter + badges).
+  availabilitySummary: (date) =>
+    request(`/restaurants/availability-summary?date=${encodeURIComponent(date)}`),
+  // Day-by-day status across a range (calendar colouring).
+  availabilityCalendar: (id, from, to) =>
+    request(
+      `/restaurants/${id}/availability-calendar?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`,
+    ),
+  // First upcoming bookable date.
+  nextAvailability: (id, from, guests) =>
+    request(
+      `/restaurants/${id}/next-availability?from=${encodeURIComponent(from)}${guests ? `&guests=${guests}` : ''}`,
+    ),
   getReservationConfig: (id) => request(`/restaurants/${id}/reservation-config`),
   createReservation: (payload) =>
     request('/reservations', { method: 'POST', body: JSON.stringify(payload) }),

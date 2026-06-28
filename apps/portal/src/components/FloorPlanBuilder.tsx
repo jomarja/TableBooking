@@ -3,6 +3,8 @@ import { FiTrash2, FiRotateCw } from 'react-icons/fi';
 // The builder renders through the SAME shared canvas the customer app uses.
 import { FloorPlanCanvas, PALETTE, toRelX, toRelY } from '@shared/floorplan/index.js';
 import type { FloorElement, TableModel, Zone } from '../types';
+import { NumberField } from './NumberField';
+import { Select } from './Select';
 
 let idc = 0;
 const uid = (p: string) => `${p}_${Date.now().toString(36)}_${idc++}`;
@@ -58,10 +60,13 @@ export function FloorPlanBuilder({ state, onChange }: Props) {
 
   const addElement = (type: string) => {
     const size = DEFAULT_SIZES[type] || { w: 10, h: 10 };
+    // Cascade each new element so consecutive adds don't stack on one spot.
+    const n = state.elements.length;
+    const pos = { x: 6 + ((n % 8) * 11), y: 6 + ((Math.floor(n / 8) % 5) * 12) };
     const el: FloorElement = {
       id: uid('el'),
       type,
-      position: { x: 46, y: 46 },
+      position: pos,
       size: { width: size.w, height: size.h },
       rotation: 0,
       metadata: {},
@@ -77,7 +82,7 @@ export function FloorPlanBuilder({ state, onChange }: Props) {
         zoneId: state.zones[0]?.id || null,
         tags: [],
         mergeGroup: null,
-        position: { x: 50, y: 50 },
+        position: { x: pos.x + size.w / 2, y: pos.y + size.h / 2 },
         size: { width: size.w, height: size.h },
         rotation: 0,
       };
@@ -245,46 +250,55 @@ export function FloorPlanBuilder({ state, onChange }: Props) {
             {selectedTable && (
               <>
                 <PropField label="Table number">
-                  <input
-                    type="number"
+                  <NumberField
+                    min={1}
                     className="tb-input"
                     value={selectedTable.number}
-                    onChange={(e) => updateSelectedTable({ number: Number(e.target.value) })}
+                    onChange={(n) => updateSelectedTable({ number: n })}
                   />
                 </PropField>
                 <PropField label="Capacity">
-                  <input
-                    type="number"
+                  <NumberField
                     min={1}
                     className="tb-input"
                     value={selectedTable.capacity}
-                    onChange={(e) => updateSelectedTable({ capacity: Number(e.target.value) })}
+                    onChange={(n) => updateSelectedTable({ capacity: n })}
+                  />
+                </PropField>
+                <PropField label="Min capacity">
+                  <NumberField
+                    min={0}
+                    className="tb-input"
+                    value={selectedTable.minCapacity || 0}
+                    onChange={(n) => updateSelectedTable({ minCapacity: n || null })}
                   />
                 </PropField>
                 <PropField label="Shape">
-                  <select
-                    className="tb-input"
+                  <Select
+                    className="w-full"
+                    ariaLabel="Shape"
                     value={selectedTable.shape}
-                    onChange={(e) =>
-                      updateSelectedTable({ shape: e.target.value as TableModel['shape'] })
+                    onChange={(v) =>
+                      updateSelectedTable({ shape: v as TableModel['shape'] })
                     }
-                  >
-                    <option value="CIRCLE">Circle</option>
-                    <option value="SQUARE">Square</option>
-                    <option value="RECT">Rectangle</option>
-                  </select>
+                    options={[
+                      { value: 'CIRCLE', label: 'Circle' },
+                      { value: 'SQUARE', label: 'Square' },
+                      { value: 'RECT', label: 'Rectangle' },
+                    ]}
+                  />
                 </PropField>
                 <PropField label="Zone">
-                  <select
-                    className="tb-input"
+                  <Select
+                    className="w-full"
+                    ariaLabel="Zone"
                     value={selectedTable.zoneId || ''}
-                    onChange={(e) => updateSelectedTable({ zoneId: e.target.value || null })}
-                  >
-                    <option value="">—</option>
-                    {state.zones.map((z) => (
-                      <option key={z.id} value={z.id}>{z.name}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => updateSelectedTable({ zoneId: v || null })}
+                    options={[
+                      { value: '', label: '—' },
+                      ...state.zones.map((z) => ({ value: z.id, label: z.name })),
+                    ]}
+                  />
                 </PropField>
                 <PropField label="Merge group (optional)">
                   <input
@@ -325,25 +339,25 @@ export function FloorPlanBuilder({ state, onChange }: Props) {
 
             <div className="grid grid-cols-2 gap-2">
               <PropField label="Width">
-                <input
-                  type="number"
+                <NumberField
+                  min={1}
                   className="tb-input"
                   value={Math.round(selectedEl.size.width)}
-                  onChange={(e) =>
+                  onChange={(n) =>
                     updateElement(selectedEl.id, {
-                      size: { ...selectedEl.size, width: Number(e.target.value) },
+                      size: { ...selectedEl.size, width: n },
                     })
                   }
                 />
               </PropField>
               <PropField label="Height">
-                <input
-                  type="number"
+                <NumberField
+                  min={1}
                   className="tb-input"
                   value={Math.round(selectedEl.size.height)}
-                  onChange={(e) =>
+                  onChange={(n) =>
                     updateElement(selectedEl.id, {
-                      size: { ...selectedEl.size, height: Number(e.target.value) },
+                      size: { ...selectedEl.size, height: n },
                     })
                   }
                 />

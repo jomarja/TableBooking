@@ -21,6 +21,12 @@ build
 # Nest build output
 server/dist
 
+# Runtime data files (written by the server, migration-free stores)
+audit-log.jsonl
+server/audit-log.jsonl
+customer-meta.json
+server/customer-meta.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

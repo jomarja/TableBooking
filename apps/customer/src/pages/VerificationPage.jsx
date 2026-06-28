@@ -68,13 +68,24 @@ export default function VerificationPage() {
     }
 
     setIsLoading(true);
+    setError('');
 
     // Simulated verification delay for UX
     await new Promise(resolve => setTimeout(resolve, 1500));
 
-    updateReservation('verified', true);
-    await confirmReservation();
-    navigate('/reservation/confirmation');
+    try {
+      updateReservation('verified', true);
+      // Only navigate on a genuine booking — if the restaurant's rules reject
+      // it (group size, capacity, lead time, online disabled…), show why.
+      await confirmReservation();
+      navigate('/reservation/confirmation');
+    } catch (e) {
+      setError(
+        e?.message ||
+          'We could not complete your reservation. Please go back and try another time.',
+      );
+      setIsLoading(false);
+    }
   };
 
   const handleResend = () => {

@@ -1,4 +1,8 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  Injectable,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
@@ -70,6 +74,69 @@ export class AuthService {
     };
   }
 
+  /** Mint a staff token that lets an admin act as a restaurant. It is a normal
+   *  staff token (so guards + ownership checks just work) plus impersonation
+   *  claims for the banner + audit log. */
+  async impersonationToken(restaurantId: string, admin: JwtPayload) {
+    const restaurant = await this.prisma.restaurant.findFirst({
+      where: { id: restaurantId, isArchived: false },
+    });
+    if (!restaurant) throw new NotFoundException('Restaurant not found');
+    const staff = await this.prisma.staff.findFirst({
+      where: { restaurantId },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (!staff) {
+      throw new NotFoundException('Restaurant has no staff account to act as');
+    }
+    const payload: JwtPayload = {
+      sub: staff.id,
+      role: 'staff',
+      restaurantId,
+      email: staff.email,
+      name: staff.name,
+      impersonatedBy: admin.name,
+      impersonatorId: admin.sub,
+    };
+    return {
+      token: this.jwt.sign(payload, { expiresIn: '4h' }),
+      restaurant: { id: restaurant.id, name: restaurant.name },
+    };
+  }
+
+  /** Update the signed-in user's display name (staff or admin). */
+  async updateProfile(payload: JwtPayload, name: string) {
+    if (payload.role === 'admin') {
+      await this.prisma.admin.update({ where: { id: payload.sub }, data: { name } });
+    } else {
+      await this.prisma.staff.update({ where: { id: payload.sub }, data: { name } });
+    }
+    return { ok: true, name };
+  }
+
+  /** Change the signed-in user's password after verifying the current one. */
+  async changePassword(payload: JwtPayload, currentPassword: string, newPassword: string) {
+    const record =
+      payload.role === 'admin'
+        ? await this.prisma.admin.findUnique({ where: { id: payload.sub } })
+        : await this.prisma.staff.findUnique({ where: { id: payload.sub } });
+    if (!record) throw new UnauthorizedException();
+    if (!(await bcrypt.compare(currentPassword, record.passwordHash))) {
+      throw new UnauthorizedException('Current password is incorrect');
+    }
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    if (payload.role === 'admin') {
+      await this.prisma.admin.update({ where: { id: payload.sub }, data: { passwordHash } });
+    } else {
+      // Clear firstLogin too — a staff member who sets their own password is set up.
+      await this.prisma.staff.update({
+        where: { id: payload.sub },
+        data: { passwordHash, firstLogin: false },
+      });
+    }
+    return { ok: true };
+  }
+
   async me(payload: JwtPayload) {
     if (payload.role === 'admin') {
       const admin = await this.prisma.admin.findUnique({
@@ -96,6 +163,8 @@ export class AuthService {
         firstLogin: staff.firstLogin,
       },
       restaurant: serializeRestaurant(staff.restaurant),
+      // Present only on impersonation sessions; drives the portal banner.
+      impersonatedBy: payload.impersonatedBy ?? null,
     };
   }
 }

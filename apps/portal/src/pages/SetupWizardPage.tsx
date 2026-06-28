@@ -15,40 +15,81 @@ import {
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { FloorPlanBuilder, type BuilderState } from '../components/FloorPlanBuilder';
-import type { MenuItem, RestaurantImage } from '../types';
+import type { MenuItem, RestaurantImage, TableModel } from '../types';
+import { parsePriceRange, formatPriceRange, priceLevelFromRange } from '../lib/price';
+import { NumberField } from '../components/NumberField';
+import { Select } from '../components/Select';
+import ImpersonationBanner from '../components/ImpersonationBanner';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const STEPS = [
   'Restaurant Info',
   'Photos',
   'Menu',
   'Operating Hours',
-  'Floor Plan',
   'Configure Tables',
+  'Floor Plan',
   'Review',
   'Publish',
 ];
 
+// Keep in sync with Settings + the customer filter chips
+// (apps/customer/src/data/restaurants.js).
 const CUISINES = [
   'georgian', 'asian', 'italian', 'seafood', 'sushi', 'pizza',
   'burgers', 'vegan', 'steakhouse', 'mexican', 'indian', 'mediterranean',
+  'desserts', 'shawarma', 'fastfood',
 ];
 
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
 
-const PRICE_LEVELS: { label: string; value: number }[] = [
-  { label: '€ – Budget', value: 1 },
-  { label: '€€ – Moderate', value: 2 },
-  { label: '€€€ – Upscale', value: 3 },
-  { label: '€€€€ – Fine Dining', value: 4 },
-];
-
 const IMAGE_TYPES = ['COVER', 'INTERIOR', 'TERRACE', 'FOOD', 'BAR'] as const;
+
+// Give every table that isn't yet linked to a floor-plan element a position on a
+// non-overlapping grid (and create that element) so tables added in the
+// "Configure Tables" step appear — and become draggable — on the floor plan.
+function placeTablesOnGrid(state: BuilderState): BuilderState {
+  const linked = new Set(
+    state.elements
+      .filter((e) => e.type === 'table' && e.metadata?.tableId)
+      .map((e) => e.metadata!.tableId as string),
+  );
+  const unplaced = state.tables.filter((t) => !linked.has(t.id));
+  if (unplaced.length === 0) return state;
+  const elements = [...state.elements];
+  let tables = state.tables;
+  let n = state.elements.filter((e) => e.type === 'table').length;
+  for (const t of unplaced) {
+    const size = { width: t.size?.width || 8, height: t.size?.height || 8 };
+    const pos = { x: 6 + ((n % 8) * 11), y: 6 + ((Math.floor(n / 8) % 5) * 12) };
+    elements.push({
+      id: `el_${Date.now().toString(36)}_${n}`,
+      type: 'table',
+      position: pos,
+      size,
+      rotation: 0,
+      metadata: { tableId: t.id, number: t.number },
+    });
+    tables = tables.map((x) =>
+      x.id === t.id
+        ? { ...x, position: { x: pos.x + size.width / 2, y: pos.y + size.height / 2 } }
+        : x,
+    );
+    n++;
+  }
+  return { ...state, elements, tables };
+}
 
 export default function SetupWizardPage() {
   const { restaurant, refresh, logout } = useAuth();
   const navigate = useNavigate();
   const [step, setStep] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  const [confirmLogout, setConfirmLogout] = useState(false);
+  // Unique id for the default zone — must be globally unique (zone id is a PK),
+  // so we can't hard-code one shared across restaurants.
+  const [defaultZoneId] = useState(() => `z_${Math.random().toString(36).slice(2, 10)}`);
 
   // Step 0 — Restaurant Info
   const [info, setInfo] = useState({
@@ -58,7 +99,8 @@ export default function SetupWizardPage() {
     website: '',
     phone: '',
     description: '',
-    priceLevel: 1,
+    priceMin: 30,
+    priceMax: 60,
     restDays: [] as string[],
   });
 
@@ -88,13 +130,14 @@ export default function SetupWizardPage() {
   const [builder, setBuilder] = useState<BuilderState>({
     elements: [],
     tables: [],
-    zones: [{ id: 'z_indoor', name: 'Indoor' }],
+    zones: [{ id: defaultZoneId, name: 'Indoor' }],
     background: null,
   });
 
   // Hydrate from existing restaurant on mount
   useEffect(() => {
     if (!restaurant) return;
+    const pr = parsePriceRange(restaurant.priceRange);
     setInfo((p) => ({
       ...p,
       name: restaurant.name || '',
@@ -103,7 +146,8 @@ export default function SetupWizardPage() {
       website: restaurant.website || '',
       phone: restaurant.phone || '',
       description: restaurant.description || '',
-      priceLevel: restaurant.priceLevel || 1,
+      priceMin: pr.min,
+      priceMax: pr.max,
       restDays: restaurant.restDays || [],
     }));
     setHours((p) => ({
@@ -120,17 +164,36 @@ export default function SetupWizardPage() {
       setBuilder({
         elements: restaurant.floorPlan.elements,
         tables: restaurant.tables,
-        zones: restaurant.zones.length ? restaurant.zones : [{ id: 'z_indoor', name: 'Indoor' }],
+        zones: restaurant.zones.length ? restaurant.zones : [{ id: defaultZoneId, name: 'Indoor' }],
         background: restaurant.floorPlan.background,
       });
     }
   }, [restaurant]);
+
+  // Entering the Floor Plan step: drop any not-yet-placed tables onto a
+  // non-overlapping grid so they show up (and can be dragged) on the canvas.
+  useEffect(() => {
+    if (step !== 5) return;
+    setBuilder((b) => placeTablesOnGrid(b));
+  }, [step]);
 
   const next = () => setStep((s) => Math.min(s + 1, STEPS.length - 1));
   const back = () => setStep((s) => Math.max(s - 1, 0));
 
   const persistProgress = async () => {
     if (!restaurant) return;
+    // Per-table minCapacity lives in reservationRules.resourceMeta (no column).
+    const existingMeta = (restaurant.reservationRules?.resourceMeta || {}) as Record<
+      string,
+      { name?: string; description?: string; minCapacity?: number }
+    >;
+    const resourceMeta: Record<string, { name?: string; description?: string; minCapacity?: number }> = {};
+    for (const t of builder.tables) {
+      const entry = { ...(existingMeta[t.id] || {}) };
+      if (t.minCapacity && t.minCapacity > 1) entry.minCapacity = Math.min(t.minCapacity, t.capacity);
+      else delete entry.minCapacity;
+      if (Object.keys(entry).length) resourceMeta[t.id] = entry;
+    }
     await api.updateRestaurant(restaurant.id, {
       name: info.name,
       cuisine: info.cuisines[0] || 'georgian',
@@ -139,7 +202,8 @@ export default function SetupWizardPage() {
       website: info.website,
       phone: info.phone,
       description: info.description,
-      priceLevel: info.priceLevel,
+      priceRange: formatPriceRange(info.priceMin, info.priceMax),
+      priceLevel: priceLevelFromRange(info.priceMax),
       restDays: info.restDays,
       openingTime: hours.openingTime,
       kitchenClosing: hours.kitchenClosing,
@@ -148,6 +212,7 @@ export default function SetupWizardPage() {
       reservationConfirmationPolicy: hours.autoConfirm
         ? { autoConfirm: true }
         : { autoConfirm: false, confirmationWindowMinutes: 15 },
+      reservationRules: { ...(restaurant.reservationRules || {}), resourceMeta },
     } as never);
     await api.setZones(restaurant.id, builder.zones.map((z) => ({ id: z.id, name: z.name })));
     await api.setTables(restaurant.id, builder.tables);
@@ -157,12 +222,14 @@ export default function SetupWizardPage() {
   const publish = async () => {
     if (!restaurant) return;
     setSaving(true);
+    setError('');
     try {
       await persistProgress();
       await api.updateRestaurant(restaurant.id, { published: true } as never);
       await refresh();
       navigate('/', { replace: true });
-    } finally {
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not publish. Please try again.');
       setSaving(false);
     }
   };
@@ -262,10 +329,24 @@ export default function SetupWizardPage() {
 
   return (
     <div className="min-h-screen bg-slate-100 py-10 px-4">
+      <ImpersonationBanner />
+      <ConfirmDialog
+        open={confirmLogout}
+        title="Log out?"
+        message="Are you sure you want to log out?"
+        confirmLabel="Log out"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmLogout(false);
+          logout();
+          navigate('/login');
+        }}
+        onCancel={() => setConfirmLogout(false)}
+      />
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-2xl font-bold text-slate-800">Welcome — let's set up your restaurant</h1>
-          <button onClick={() => { logout(); navigate('/login'); }} className="text-sm text-slate-400 hover:text-slate-600">
+          <button onClick={() => setConfirmLogout(true)} className="text-sm text-slate-400 hover:text-slate-600">
             Log out
           </button>
         </div>
@@ -338,12 +419,24 @@ export default function SetupWizardPage() {
                     onChange={(e) => setInfo({ ...info, website: e.target.value })}
                   />
                 </Field>
-                <Field label="Average Price Per Person">
-                  <select className="tb-input" value={info.priceLevel} onChange={(e) => setInfo({ ...info, priceLevel: Number(e.target.value) })}>
-                    {PRICE_LEVELS.map((p) => (
-                      <option key={p.value} value={p.value}>{p.label}</option>
-                    ))}
-                  </select>
+                <Field label="Average Price Per Person (₾)">
+                  <div className="flex items-center gap-2">
+                    <NumberField
+                      min={0}
+                      className="tb-input flex-1"
+                      placeholder="From"
+                      value={info.priceMin}
+                      onChange={(n) => setInfo({ ...info, priceMin: n })}
+                    />
+                    <span className="text-slate-400">–</span>
+                    <NumberField
+                      min={0}
+                      className="tb-input flex-1"
+                      placeholder="To"
+                      value={info.priceMax}
+                      onChange={(n) => setInfo({ ...info, priceMax: n })}
+                    />
+                  </div>
                 </Field>
               </div>
 
@@ -413,15 +506,16 @@ export default function SetupWizardPage() {
                 <p className="text-sm font-medium text-slate-700">Add a photo</p>
 
                 <Field label="Category">
-                  <select
-                    className="tb-input"
+                  <Select
+                    className="w-full"
+                    ariaLabel="Category"
                     value={newImageType}
-                    onChange={(e) => setNewImageType(e.target.value as typeof newImageType)}
-                  >
-                    {IMAGE_TYPES.map((t) => (
-                      <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
-                    ))}
-                  </select>
+                    onChange={(v) => setNewImageType(v as typeof newImageType)}
+                    options={IMAGE_TYPES.map((t) => ({
+                      value: t,
+                      label: t.charAt(0) + t.slice(1).toLowerCase(),
+                    }))}
+                  />
                 </Field>
 
                 {/* Upload from device */}
@@ -564,16 +658,25 @@ export default function SetupWizardPage() {
             </div>
           )}
 
-          {/* ---- STEPS 4/5: Floor Plan + Tables ---- */}
-          {(step === 4 || step === 5) && (
+          {/* ---- STEP 4: Configure Tables (list) ---- */}
+          {step === 4 && (
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-lg font-bold text-slate-800">Configure Tables</h2>
+                <p className="text-sm text-slate-500">
+                  Add your zones and the tables guests can book. You'll arrange them visually on the floor plan in the next step.
+                </p>
+              </div>
+              <WizardTables state={builder} onChange={setBuilder} />
+            </div>
+          )}
+
+          {/* ---- STEP 5: Floor Plan (arrange) ---- */}
+          {step === 5 && (
             <div className="space-y-3">
-              <h2 className="text-lg font-bold text-slate-800">
-                {step === 4 ? 'Design Your Floor Plan' : 'Configure Tables'}
-              </h2>
+              <h2 className="text-lg font-bold text-slate-800">Design Your Floor Plan</h2>
               <p className="text-sm text-slate-500">
-                {step === 4
-                  ? 'Add walls, kitchen, bar, and tables. Optionally upload a floor-plan image to trace over.'
-                  : 'Select each table to set its number, capacity, shape, zone, and tags.'}
+                Your tables are laid out below — drag each one where you like. Add walls, kitchen, bar, and other decor from the palette.
               </p>
               <FloorPlanBuilder state={builder} onChange={setBuilder} />
             </div>
@@ -588,7 +691,7 @@ export default function SetupWizardPage() {
               <ReviewRow label="Address" value={info.address || '—'} />
               <ReviewRow label="Phone" value={info.phone || '—'} />
               <ReviewRow label="Description" value={info.description ? info.description.slice(0, 60) + (info.description.length > 60 ? '…' : '') : '—'} />
-              <ReviewRow label="Price level" value={PRICE_LEVELS.find((p) => p.value === info.priceLevel)?.label || '—'} />
+              <ReviewRow label="Price range" value={`₾${info.priceMin} – ₾${info.priceMax}`} />
               <ReviewRow label="Rest days" value={info.restDays.join(', ') || 'None'} />
               <ReviewRow label="Photos" value={`${images.length} photo${images.length !== 1 ? 's' : ''}`} />
               <ReviewRow label="Menu items" value={`${menu.length} item${menu.length !== 1 ? 's' : ''}`} />
@@ -616,6 +719,7 @@ export default function SetupWizardPage() {
               >
                 {saving ? 'Publishing…' : 'Publish restaurant'}
               </button>
+              {error && <p className="mt-4 text-sm text-red-500">{error}</p>}
             </div>
           )}
         </div>
@@ -667,6 +771,234 @@ function ReviewRow({ label, value }: { label: string; value: string }) {
   );
 }
 
+function WizardTables({
+  state,
+  onChange,
+}: {
+  state: BuilderState;
+  onChange: (next: BuilderState) => void;
+}) {
+  const [zoneName, setZoneName] = useState('');
+  const [form, setForm] = useState<
+    null | { id?: string; capacity: number; minCapacity: number; zoneId: string; shape: TableModel['shape'] }
+  >(null);
+
+  const zones = state.zones;
+  const tables = [...state.tables].sort((a, b) => a.number - b.number);
+  const zoneLabel = (id: string | null) => zones.find((z) => z.id === id)?.name || '—';
+  const nextNumber = () => state.tables.reduce((m, t) => Math.max(m, t.number), 0) + 1;
+
+  const addZone = () => {
+    const name = zoneName.trim();
+    if (!name) return;
+    onChange({
+      ...state,
+      zones: [...zones, { id: `z_${Math.random().toString(36).slice(2, 10)}`, name }],
+    });
+    setZoneName('');
+  };
+  const renameZone = (id: string, name: string) =>
+    onChange({ ...state, zones: zones.map((z) => (z.id === id ? { ...z, name } : z)) });
+  const removeZone = (id: string) =>
+    onChange({
+      ...state,
+      zones: zones.filter((z) => z.id !== id),
+      tables: state.tables.map((t) => (t.zoneId === id ? { ...t, zoneId: null } : t)),
+    });
+
+  const openAdd = () => setForm({ capacity: 2, minCapacity: 0, zoneId: zones[0]?.id || '', shape: 'CIRCLE' });
+  const openEdit = (t: TableModel) =>
+    setForm({ id: t.id, capacity: t.capacity, minCapacity: t.minCapacity || 0, zoneId: t.zoneId || '', shape: t.shape });
+
+  const saveTable = () => {
+    if (!form) return;
+    const minCap = form.minCapacity > 1 ? Math.min(form.minCapacity, form.capacity) : null;
+    if (form.id) {
+      onChange({
+        ...state,
+        tables: state.tables.map((t) =>
+          t.id === form.id
+            ? { ...t, capacity: form.capacity, minCapacity: minCap, zoneId: form.zoneId || null, shape: form.shape }
+            : t,
+        ),
+      });
+    } else {
+      const table: TableModel = {
+        id: `tbl_${Math.random().toString(36).slice(2, 10)}`,
+        number: nextNumber(),
+        capacity: form.capacity,
+        minCapacity: minCap,
+        shape: form.shape,
+        zoneId: form.zoneId || null,
+        tags: [],
+        mergeGroup: null,
+        position: { x: 50, y: 50 },
+        size: { width: 8, height: 8 },
+        rotation: 0,
+      };
+      onChange({ ...state, tables: [...state.tables, table] });
+    }
+    setForm(null);
+  };
+
+  const removeTable = (t: TableModel) =>
+    onChange({
+      ...state,
+      tables: state.tables.filter((x) => x.id !== t.id),
+      elements: state.elements.filter((e) => e.metadata?.tableId !== t.id),
+    });
+
+  return (
+    <div className="space-y-5">
+      {/* Zones */}
+      <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-slate-700">Zones</h3>
+        <div className="space-y-2">
+          {zones.map((z) => (
+            <div key={z.id} className="flex items-center gap-2">
+              <input className="tb-input" value={z.name} onChange={(e) => renameZone(z.id, e.target.value)} />
+              <button
+                onClick={() => removeZone(z.id)}
+                disabled={zones.length <= 1}
+                className="p-2 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-30"
+                title={zones.length <= 1 ? 'Keep at least one zone' : 'Remove zone'}
+              >
+                <FiTrash2 size={14} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <div className="flex items-center gap-2">
+          <input
+            className="tb-input"
+            placeholder="New zone (e.g. Terrace, VIP Room)"
+            value={zoneName}
+            onChange={(e) => setZoneName(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && addZone()}
+          />
+          <button
+            onClick={addZone}
+            className="flex items-center gap-1 px-3 py-2 bg-slate-200 text-slate-700 rounded-lg text-sm font-medium hover:bg-slate-300 whitespace-nowrap"
+          >
+            <FiPlus /> Add zone
+          </button>
+        </div>
+      </div>
+
+      {/* Tables */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-slate-700">Tables</h3>
+          <button
+            onClick={openAdd}
+            className="flex items-center gap-1 px-3 py-1.5 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
+          >
+            <FiPlus /> Add table
+          </button>
+        </div>
+
+        {form && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <p className="text-sm font-semibold text-slate-700">{form.id ? 'Edit table' : 'Add table'}</p>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <Field label="Max capacity">
+                <NumberField
+                  min={1}
+                  className="tb-input"
+                  value={form.capacity}
+                  onChange={(n) => setForm({ ...form, capacity: n })}
+                />
+              </Field>
+              <Field label="Min capacity (optional)">
+                <NumberField
+                  min={0}
+                  className="tb-input"
+                  value={form.minCapacity}
+                  onChange={(n) => setForm({ ...form, minCapacity: n })}
+                />
+              </Field>
+              <Field label="Zone">
+                <Select
+                  className="w-full"
+                  ariaLabel="Zone"
+                  value={form.zoneId}
+                  onChange={(v) => setForm({ ...form, zoneId: v })}
+                  options={[
+                    { value: '', label: '— None —' },
+                    ...zones.map((z) => ({ value: z.id, label: z.name })),
+                  ]}
+                />
+              </Field>
+              <Field label="Shape">
+                <Select
+                  className="w-full"
+                  ariaLabel="Shape"
+                  value={form.shape}
+                  onChange={(v) => setForm({ ...form, shape: v as TableModel['shape'] })}
+                  options={[
+                    { value: 'CIRCLE', label: 'Circle' },
+                    { value: 'SQUARE', label: 'Square' },
+                    { value: 'RECT', label: 'Rectangle' },
+                  ]}
+                />
+              </Field>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={saveTable}
+                className="flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-medium hover:bg-indigo-700"
+              >
+                <FiCheck size={14} /> {form.id ? 'Update' : 'Add table'}
+              </button>
+              <button onClick={() => setForm(null)} className="px-4 py-2 text-slate-500 text-sm hover:text-slate-700">
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+          {tables.length === 0 ? (
+            <p className="p-10 text-center text-slate-400 text-sm">No tables yet. Add your first table above.</p>
+          ) : (
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-slate-500 text-xs uppercase">
+                <tr>
+                  <th className="text-left px-5 py-3 font-semibold">Table</th>
+                  <th className="text-left px-3 py-3 font-semibold">Capacity</th>
+                  <th className="text-left px-3 py-3 font-semibold">Zone</th>
+                  <th className="text-left px-3 py-3 font-semibold">Shape</th>
+                  <th className="px-3 py-3" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {tables.map((t) => (
+                  <tr key={t.id} className="hover:bg-slate-50">
+                    <td className="px-5 py-3 font-medium text-slate-800">Table {t.number}</td>
+                    <td className="px-3 py-3 text-slate-600">
+                      {t.minCapacity && t.minCapacity > 1 ? `${t.minCapacity}–${t.capacity}` : t.capacity}
+                    </td>
+                    <td className="px-3 py-3 text-slate-600">{zoneLabel(t.zoneId)}</td>
+                    <td className="px-3 py-3 text-slate-600 capitalize">{t.shape.toLowerCase()}</td>
+                    <td className="px-3 py-3 text-right whitespace-nowrap">
+                      <button onClick={() => openEdit(t)} className="p-1.5 text-slate-400 hover:text-indigo-600 rounded-lg hover:bg-indigo-50" title="Edit">
+                        <FiEdit2 size={14} />
+                      </button>
+                      <button onClick={() => removeTable(t)} className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-red-50" title="Delete">
+                        <FiTrash2 size={14} />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function MenuItemForm({
   form,
   editing,
@@ -700,14 +1032,9 @@ function MenuItemForm({
       <Field label="Description">
         <input className="tb-input" value={form.description} onChange={(e) => set('description', e.target.value)} placeholder="Short description…" />
       </Field>
-      <div className="grid grid-cols-2 gap-3">
-        <Field label="Price">
-          <input className="tb-input" value={form.price} onChange={(e) => set('price', e.target.value)} placeholder="e.g. 12 ₾" />
-        </Field>
-        <Field label="Photo URL (optional)">
-          <input className="tb-input" value={form.photo} onChange={(e) => set('photo', e.target.value)} placeholder="https://…" />
-        </Field>
-      </div>
+      <Field label="Price">
+        <input className="tb-input" value={form.price} onChange={(e) => set('price', e.target.value)} placeholder="e.g. 12 ₾" />
+      </Field>
       <div className="flex gap-2">
         <button
           onClick={onSave}

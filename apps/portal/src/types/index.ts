@@ -17,6 +17,9 @@ export interface TableModel {
   id: string;
   number: number;
   capacity: number;
+  /** Optional minimum party size that can book this table (merged from
+   *  resourceMeta). null/undefined means no minimum — even one guest can book. */
+  minCapacity?: number | null;
   shape: 'CIRCLE' | 'SQUARE' | 'RECT';
   zoneId: string | null;
   tags: string[];
@@ -94,27 +97,58 @@ export type ResourceMode = 'FLOOR_PLAN' | 'RESOURCE_LIST';
 export interface ResourceMeta {
   name?: string;
   description?: string;
+  /** Minimum party size that can book this resource. Omitted = no minimum. */
+  minCapacity?: number;
 }
+export type FieldRequirement = 'hidden' | 'optional' | 'required';
+
+export interface RequiredFieldsConfig {
+  firstName?: FieldRequirement;
+  lastName?: FieldRequirement;
+  phone?: FieldRequirement;
+  email?: FieldRequirement;
+  address?: FieldRequirement;
+  comments?: FieldRequirement;
+}
+
+export interface SameDayCutoff {
+  mode: 'disabled' | 'time' | 'beforeClose';
+  time?: string; // HH:mm (mode === 'time')
+  hoursBeforeClose?: number; // mode === 'beforeClose'
+}
+
 export interface ReservationRules {
   defaultDurationMinutes: number;
   durationByGuests: { maxGuests: number; minutes: number }[];
-  // How resources are managed. FLOOR_PLAN (default) = floor-plan tables +
-  // customer table selection; RESOURCE_LIST = manually-listed resources
-  // (tables/rooms/spaces), no floor plan, staff/auto assignment.
   resourceMode?: ResourceMode;
-  // Per-table display name/description for RESOURCE_LIST mode, keyed by table id.
-  // (Stored here to avoid a schema migration; promote to Table columns later.)
   resourceMeta?: Record<string, ResourceMeta>;
+  // Reservation Settings module (all migration-free, stored in this blob):
+  intervalMinutes?: number;
+  onlineEnabled?: boolean;
+  waitingList?: boolean;
+  minGroupSize?: number;
+  maxGroupSize?: number;
+  minLeadTimeMinutes?: number;
+  maxBookingWindowDays?: number;
+  sameDayCutoff?: SameDayCutoff;
+  requiredFields?: RequiredFieldsConfig;
+  applyRequiredToWalkins?: boolean;
+  staffNotifyMode?: 'never' | 'always' | 'online' | 'large';
+  largeGroupThreshold?: number;
+  reservationNotice?: string;
 }
 
 export interface ConfirmationPolicy {
   autoConfirm: boolean;
   confirmationWindowMinutes?: number;
+  approvalMode?: 'auto' | 'manual' | 'hybrid';
 }
 
 export interface CapacityRules {
   maxGuestsPerReservation: number;
   maxReservationsPerTimeSlot: number;
+  maxGuestsPerInterval?: number;
+  maxOnlineReservationsPerDay?: number;
 }
 
 export interface Reservation {
@@ -135,6 +169,7 @@ export interface Reservation {
   channel: ReservationChannel;
   status: ReservationStatus;
   createdAt: string;
+  lastEditedBy?: string | null;
 }
 
 export interface RecurrenceRule {
@@ -179,6 +214,7 @@ export interface DashboardSummary {
   };
   todayReservations: Reservation[];
   upcomingReservations: Reservation[];
+  pendingOnline: Reservation[];
   blockedToday: BlockedPeriod[];
   recentActivity: {
     id: string;

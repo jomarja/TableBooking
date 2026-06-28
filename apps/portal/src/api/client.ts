@@ -7,6 +7,7 @@ import type {
 } from '../types';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+const ADMIN_URL = import.meta.env.VITE_ADMIN_URL || 'http://localhost:5175';
 
 const TOKEN_KEY = 'tablebooker_portal_token';
 
@@ -58,7 +59,22 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ email, password }),
     }),
-  me: () => request<{ role: string; staff: Staff; restaurant: Restaurant }>('/auth/me'),
+  me: () =>
+    request<{ role: string; staff: Staff; restaurant: Restaurant; impersonatedBy?: string | null }>(
+      '/auth/me',
+    ),
+  endImpersonation: () =>
+    request<{ ok: boolean }>('/auth/impersonation/end', { method: 'POST' }),
+  updateProfile: (name: string) =>
+    request<{ ok: boolean; name: string }>('/auth/profile', {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    }),
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ ok: boolean }>('/auth/change-password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
 
   getRestaurant: (id: string) => request<Restaurant>(`/restaurants/${id}/manage`),
   updateRestaurant: (id: string, data: Partial<Restaurant>) =>
@@ -104,6 +120,40 @@ export const api = {
 
   listReservations: (date?: string) =>
     request<Reservation[]>(`/reservations${date ? `?date=${date}` : ''}`),
+  customerProfile: (phone: string) =>
+    request<{
+      customer: {
+        name: string;
+        surname: string;
+        phone: string;
+        occasion: string | null;
+        customerNotes: string | null;
+        staffNotes: string | null;
+        totalVisits: number;
+        email: string | null;
+        birthday: string | null;
+        company: string | null;
+        address: string | null;
+        tags: string[];
+        notes: string | null;
+      };
+      reservations: Reservation[];
+    }>(`/reservations/customer?phone=${encodeURIComponent(phone)}`),
+  saveCustomerMeta: (
+    phone: string,
+    data: {
+      email?: string;
+      birthday?: string;
+      company?: string;
+      address?: string;
+      tags?: string[];
+      notes?: string;
+    },
+  ) =>
+    request(`/reservations/customer?phone=${encodeURIComponent(phone)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
   createReservation: (data: Partial<Reservation>) =>
     request<Reservation>('/reservations/manual', { method: 'POST', body: JSON.stringify(data) }),
   updateReservation: (id: string, data: Partial<Reservation>) =>
@@ -124,6 +174,17 @@ export const api = {
 
   dashboard: (date?: string) =>
     request<DashboardSummary>(`/dashboard/summary${date ? `?date=${date}` : ''}`),
+  dashboardWeek: (from?: string) =>
+    request<{
+      from: string;
+      days: {
+        date: string;
+        weekday: string;
+        reservations: number;
+        guests: number;
+        closed: boolean;
+      }[];
+    }>(`/dashboard/week${from ? `?from=${from}` : ''}`),
 };
 
-export { API_URL };
+export { API_URL, ADMIN_URL };

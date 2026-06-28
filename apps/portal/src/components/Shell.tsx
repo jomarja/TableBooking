@@ -6,24 +6,29 @@ import {
   FiMap,
   FiSlash,
   FiSettings,
+  FiSliders,
   FiLogOut,
   FiMenu,
 } from 'react-icons/fi';
 import { useAuth } from '../context/AuthContext';
+import ImpersonationBanner from './ImpersonationBanner';
+import ConfirmDialog from './ConfirmDialog';
 
 const nav = [
   { to: '/', label: 'Dashboard', icon: FiGrid, end: true },
   { to: '/reservations', label: 'Reservations', icon: FiCalendar },
   { to: '/floor-plan', label: 'Floor Plan', icon: FiMap },
   { to: '/blocked', label: 'Blocked Periods', icon: FiSlash },
+  { to: '/reservation-settings', label: 'Reservation Settings', icon: FiSliders },
   { to: '/settings', label: 'Settings', icon: FiSettings },
 ];
 
 const SIDEBAR_KEY = 'tb_sidebarCollapsed';
 
 export default function Shell({ children }: { children: ReactNode }) {
-  const { restaurant, staff, logout } = useAuth();
+  const { restaurant, staff, logout, impersonatedBy } = useAuth();
   const navigate = useNavigate();
+  const impersonating = !!impersonatedBy;
 
   // Collapsed sidebar — persisted. Defaults to collapsed on tablet/mobile
   // (< 1024px) so the scheduler gets the space; expanded on desktop.
@@ -32,6 +37,7 @@ export default function Shell({ children }: { children: ReactNode }) {
     if (saved !== null) return saved === '1';
     return typeof window !== 'undefined' && window.innerWidth < 1024;
   });
+  const [confirmLogout, setConfirmLogout] = useState(false);
   const toggle = useCallback(() => {
     setCollapsed((c) => {
       const next = !c;
@@ -59,9 +65,13 @@ export default function Shell({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen bg-slate-100">
+      {/* Impersonation banner — fixed across the very top so the admin can never
+          forget they're acting as another account. */}
+      <ImpersonationBanner />
+
       {/* Sidebar — fixed; slides fully off-screen when collapsed. */}
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-60 bg-slate-900 text-slate-300 flex flex-col transition-transform duration-200 ease-in-out ${
+        className={`fixed left-0 ${impersonating ? 'top-10 bottom-0' : 'inset-y-0'} z-40 w-60 bg-slate-900 text-slate-300 flex flex-col transition-transform duration-200 ease-in-out ${
           collapsed ? '-translate-x-full' : 'translate-x-0'
         }`}
       >
@@ -95,7 +105,7 @@ export default function Shell({ children }: { children: ReactNode }) {
         </nav>
         <div className="px-3 py-4 border-t border-slate-800">
           <button
-            onClick={handleLogout}
+            onClick={() => setConfirmLogout(true)}
             className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-300 hover:bg-slate-800 hover:text-white w-full transition-colors"
           >
             <FiLogOut size={18} />
@@ -115,9 +125,13 @@ export default function Shell({ children }: { children: ReactNode }) {
       <div
         className={`min-w-0 flex flex-col min-h-screen transition-[margin] duration-200 ease-in-out ${
           collapsed ? 'ml-0' : 'md:ml-60'
-        }`}
+        } ${impersonating ? 'pt-10' : ''}`}
       >
-        <header className="h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 sticky top-0 z-20">
+        <header
+          className={`h-16 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 sticky ${
+            impersonating ? 'top-10' : 'top-0'
+          } z-20`}
+        >
           <div className="flex items-center gap-3 min-w-0">
             {/* Single, always-present toggle — shows/hides the sidebar on press. */}
             <button
@@ -141,13 +155,31 @@ export default function Shell({ children }: { children: ReactNode }) {
                 Not published
               </span>
             )}
-            <div className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold">
+            <NavLink
+              to="/account"
+              title="Your account"
+              aria-label="Your account"
+              className="w-9 h-9 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center text-sm font-bold hover:ring-2 hover:ring-indigo-300 transition-shadow"
+            >
               {(staff?.name || 'S').charAt(0)}
-            </div>
+            </NavLink>
           </div>
         </header>
         <main className="flex-1 p-6">{children}</main>
       </div>
+
+      <ConfirmDialog
+        open={confirmLogout}
+        title="Log out?"
+        message="Are you sure you want to log out?"
+        confirmLabel="Log out"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmLogout(false);
+          handleLogout();
+        }}
+        onCancel={() => setConfirmLogout(false)}
+      />
     </div>
   );
 }

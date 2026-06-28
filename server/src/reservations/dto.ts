@@ -15,6 +15,8 @@ export class CreateCustomerReservationDto {
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() surname?: string;
   @IsOptional() @IsString() phone?: string;
+  @IsOptional() @IsString() email?: string;
+  @IsOptional() @IsString() address?: string;
   @IsOptional() @IsString() occasion?: string;
   @IsOptional() @IsString() customerNotes?: string;
   @IsOptional() @IsString() specialRequest?: string;

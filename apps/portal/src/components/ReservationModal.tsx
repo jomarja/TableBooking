@@ -20,6 +20,8 @@ import type { Reservation, ReservationChannel, ReservationStatus, TableModel } f
 import { statusBadge } from './statusBadge';
 import { RESERVATION_CHANNELS, channelMeta } from './channel';
 import { resourceLabel } from '../lib/resources';
+import { NumberField } from './NumberField';
+import { Select } from './Select';
 
 interface Props {
   reservation: Reservation | null; // null = create
@@ -292,11 +294,11 @@ export function ReservationModal({
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3 border-b border-slate-100 flex-shrink-0">
           <h3 className="text-base font-bold text-slate-800">
@@ -343,6 +345,9 @@ export function ReservationModal({
               <span className="inline-flex items-center gap-1.5"><FiClock size={14} className="text-slate-400" /> {form.startTime} → {form.endTime}</span>
               <span className="text-slate-500">Duration: <span className="font-medium text-slate-700">{fmtDuration(duration)}</span></span>
             </div>
+            {isEdit && reservation?.lastEditedBy && (
+              <p className="mt-2 text-xs text-slate-400">Last edited by {reservation.lastEditedBy}</p>
+            )}
           </div>
 
           {/* Status quick actions */}
@@ -381,7 +386,7 @@ export function ReservationModal({
             <Field label="Guests">
               <div className="flex items-center gap-2">
                 <button onClick={() => apply({ guests: Math.max(1, form.guests - 1) })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiMinus size={15} /></button>
-                <input type="number" min={1} className="tb-input text-center" value={form.guests} onChange={(e) => apply({ guests: Math.max(1, Number(e.target.value)) })} />
+                <NumberField min={1} className="tb-input text-center" value={form.guests} onChange={(n) => apply({ guests: n })} />
                 <button onClick={() => apply({ guests: form.guests + 1 })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiPlus size={15} /></button>
               </div>
             </Field>
@@ -389,14 +394,19 @@ export function ReservationModal({
 
           {/* Resource */}
           <Field label="Resource / table">
-            <select className="tb-input" value={form.tableId} onChange={(e) => apply({ tableId: e.target.value })}>
-              <option value="">— No resource —</option>
-              {tables.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {resourceLabel(restaurant, t)} ({t.capacity} seats)
-                </option>
-              ))}
-            </select>
+            <Select
+              className="w-full"
+              ariaLabel="Resource / table"
+              value={form.tableId}
+              onChange={(v) => apply({ tableId: v })}
+              options={[
+                { value: '', label: '— No resource —' },
+                ...tables.map((t) => ({
+                  value: String(t.id),
+                  label: `${resourceLabel(restaurant, t)} (${t.capacity} seats)`,
+                })),
+              ]}
+            />
           </Field>
 
           {/* Date + time */}
@@ -429,15 +439,25 @@ export function ReservationModal({
           {/* Occasion + channel */}
           <div className="grid grid-cols-2 gap-3">
             <Field label="Occasion">
-              <select className="tb-input" value={form.occasion} onChange={(e) => apply({ occasion: e.target.value })}>
-                <option value="">—</option>
-                {OCCASIONS.map((o) => <option key={o} value={o}>{o}</option>)}
-              </select>
+              <Select
+                className="w-full"
+                ariaLabel="Occasion"
+                value={form.occasion}
+                onChange={(v) => apply({ occasion: v })}
+                options={[
+                  { value: '', label: '—' },
+                  ...OCCASIONS.map((o) => ({ value: o, label: o })),
+                ]}
+              />
             </Field>
             <Field label="Booking channel">
-              <select className="tb-input" value={form.channel} onChange={(e) => apply({ channel: e.target.value as ReservationChannel })}>
-                {RESERVATION_CHANNELS.map((c) => <option key={c} value={c}>{channelMeta(c).label}</option>)}
-              </select>
+              <Select
+                className="w-full"
+                ariaLabel="Booking channel"
+                value={form.channel}
+                onChange={(v) => apply({ channel: v as ReservationChannel })}
+                options={RESERVATION_CHANNELS.map((c) => ({ value: c, label: channelMeta(c).label }))}
+              />
             </Field>
           </div>
 

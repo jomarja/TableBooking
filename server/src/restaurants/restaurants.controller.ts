@@ -7,9 +7,12 @@ import {
   Post,
   Put,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { AvailabilityService } from '../availability/availability.service';
+import { AuditService } from '../audit/audit.service';
 import { CurrentUser, JwtAuthGuard, StaffGuard } from '../auth/guards';
 import { JwtPayload } from '../auth/jwt.strategy';
 import {
@@ -25,12 +28,20 @@ export class RestaurantsController {
   constructor(
     private restaurants: RestaurantsService,
     private availability: AvailabilityService,
+    private audit: AuditService,
   ) {}
 
   // ---- Public reads ----
   @Get()
   findAll() {
     return this.restaurants.findAllPublic();
+  }
+
+  /** Per-restaurant availability status for a date (list filter + badges).
+   *  Declared before :id so the literal path wins the route match. */
+  @Get('availability-summary')
+  availabilitySummary(@Query('date') date: string) {
+    return this.availability.summarizeForDate(date);
   }
 
   @Get(':id')
@@ -41,6 +52,26 @@ export class RestaurantsController {
   @Get(':id/availability')
   getAvailability(@Param('id') id: string, @Query('date') date: string) {
     return this.availability.getAvailability(id, date);
+  }
+
+  /** Day-by-day status across a range (calendar colouring). */
+  @Get(':id/availability-calendar')
+  availabilityCalendar(
+    @Param('id') id: string,
+    @Query('from') from: string,
+    @Query('to') to: string,
+  ) {
+    return this.availability.calendarFor(id, from, to);
+  }
+
+  /** First upcoming bookable date (for "Next available day"). */
+  @Get(':id/next-availability')
+  nextAvailability(
+    @Param('id') id: string,
+    @Query('from') from: string,
+    @Query('guests') guests?: string,
+  ) {
+    return this.availability.nextAvailability(id, from, guests ? Number(guests) : undefined);
   }
 
   @Get(':id/reservation-config')
@@ -65,18 +96,31 @@ export class RestaurantsController {
     @Param('id') id: string,
     @Body() dto: UpdateRestaurantDto,
     @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
   ) {
-    return this.restaurants.update(id, user.restaurantId, dto);
+    return this.restaurants.update(id, user.restaurantId, dto, {
+      user,
+      ip: req.ip,
+    });
   }
 
   @UseGuards(JwtAuthGuard, StaffGuard)
   @Put(':id/zones')
-  setZones(
+  async setZones(
     @Param('id') id: string,
     @Body() dto: SetZonesDto,
     @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
   ) {
-    return this.restaurants.setZones(id, user.restaurantId, dto.zones);
+    const result = await this.restaurants.setZones(id, user.restaurantId, dto.zones);
+    await this.audit.log({
+      user,
+      ip: req.ip,
+      action: 'Zones Changed',
+      restaurantId: user.restaurantId,
+      newValue: dto.zones.map((z) => z.name).join(', '),
+    });
+    return result;
   }
 
   @UseGuards(JwtAuthGuard, StaffGuard)
@@ -85,21 +129,34 @@ export class RestaurantsController {
     @Param('id') id: string,
     @Body() dto: SetTablesDto,
     @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
   ) {
-    return this.restaurants.setTables(id, user.restaurantId, dto.tables);
+    return this.restaurants.setTables(id, user.restaurantId, dto.tables, {
+      user,
+      ip: req.ip,
+    });
   }
 
   @UseGuards(JwtAuthGuard, StaffGuard)
   @Put(':id/floorplan')
-  setFloorPlan(
+  async setFloorPlan(
     @Param('id') id: string,
     @Body() dto: SetFloorPlanDto,
     @CurrentUser() user: JwtPayload,
+    @Req() req: Request,
   ) {
-    return this.restaurants.setFloorPlan(id, user.restaurantId, {
+    const result = await this.restaurants.setFloorPlan(id, user.restaurantId, {
       elements: dto.elements,
       background: dto.background,
     });
+    await this.audit.log({
+      user,
+      ip: req.ip,
+      action: 'Floor Plan Changed',
+      restaurantId: user.restaurantId,
+      newValue: `${dto.elements?.length ?? 0} elements`,
+    });
+    return result;
   }
 
   // ---- Images ----

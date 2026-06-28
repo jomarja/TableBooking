@@ -12,4 +12,9 @@ export class DashboardController {
   summary(@CurrentUser() user: JwtPayload, @Query('date') date?: string) {
     return this.dashboard.summary(user.restaurantId!, date);
   }
+
+  @Get('week')
+  week(@CurrentUser() user: JwtPayload, @Query('from') from?: string) {
+    return this.dashboard.weekOverview(user.restaurantId!, from);
+  }
 }

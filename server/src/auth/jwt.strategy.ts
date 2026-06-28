@@ -8,6 +8,11 @@ export interface JwtPayload {
   restaurantId?: string;
   email: string;
   name: string;
+  // Set only on impersonation tokens an admin mints via "Login as Restaurant".
+  // The token otherwise behaves as a normal staff token; these claims let the
+  // banner + audit log show that an admin is acting as the restaurant.
+  impersonatedBy?: string; // admin display name
+  impersonatorId?: string; // admin id
 }
 
 @Injectable()

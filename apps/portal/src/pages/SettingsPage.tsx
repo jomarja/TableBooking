@@ -14,18 +14,18 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { MenuItem, ResourceMode, RestaurantImage } from '../types';
 import { ResourcesManager } from '../components/ResourcesManager';
+import { parsePriceRange, formatPriceRange, priceLevelFromRange } from '../lib/price';
+import { NumberField } from '../components/NumberField';
+import { Select } from '../components/Select';
 
+// Keep in sync with the customer filter chips (apps/customer/src/data/restaurants.js)
+// so every cuisine an owner can pick is filterable by diners and vice-versa.
 const CUISINES = [
   'georgian', 'asian', 'italian', 'seafood', 'sushi', 'pizza',
   'burgers', 'vegan', 'steakhouse', 'mexican', 'indian', 'mediterranean',
+  'desserts', 'shawarma', 'fastfood',
 ];
 const DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-const PRICE_LEVELS = [
-  { label: '€ – Budget', value: 1 },
-  { label: '€€ – Moderate', value: 2 },
-  { label: '€€€ – Upscale', value: 3 },
-  { label: '€€€€ – Fine Dining', value: 4 },
-];
 const IMAGE_TYPES = ['COVER', 'INTERIOR', 'TERRACE', 'FOOD', 'BAR'] as const;
 
 type Tab = 'profile' | 'photos' | 'menu' | 'booking' | 'resources';
@@ -42,7 +42,8 @@ export default function SettingsPage() {
     website: '',
     phone: '',
     description: '',
-    priceLevel: 1,
+    priceMin: 30,
+    priceMax: 60,
     restDays: [] as string[],
     openingTime: '10:00',
     kitchenClosing: '22:00',
@@ -70,6 +71,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!restaurant) return;
+    const pr = parsePriceRange(restaurant.priceRange);
     setForm({
       name: restaurant.name,
       cuisines: restaurant.cuisines?.length ? restaurant.cuisines : restaurant.cuisine ? [restaurant.cuisine] : [],
@@ -77,7 +79,8 @@ export default function SettingsPage() {
       website: restaurant.website,
       phone: restaurant.phone,
       description: restaurant.description || '',
-      priceLevel: restaurant.priceLevel || 1,
+      priceMin: pr.min,
+      priceMax: pr.max,
       restDays: restaurant.restDays || [],
       openingTime: restaurant.openingTime,
       kitchenClosing: restaurant.kitchenClosing,
@@ -118,18 +121,17 @@ export default function SettingsPage() {
         website: form.website,
         phone: form.phone,
         description: form.description,
-        priceLevel: form.priceLevel,
+        priceRange: formatPriceRange(form.priceMin, form.priceMax),
+        priceLevel: priceLevelFromRange(form.priceMax),
         restDays: form.restDays,
         openingTime: form.openingTime,
         kitchenClosing: form.kitchenClosing,
         closingTime: form.closingTime,
         allowTableSelection: form.allowTableSelection,
         published: form.published,
-        reservationConfirmationPolicy: form.autoConfirm
-          ? { autoConfirm: true }
-          : { autoConfirm: false, confirmationWindowMinutes: 15 },
-        // Preserve other reservationRules keys (durations, resourceMeta) and
-        // persist the chosen resource mode.
+        // Confirmation mode lives in Reservation Settings now (so we don't
+        // clobber its approvalMode here). Preserve other reservationRules keys
+        // (durations, resourceMeta) and persist the chosen resource mode.
         reservationRules: { ...(restaurant.reservationRules || {}), resourceMode: form.resourceMode },
       } as never);
       await refresh();
@@ -242,10 +244,12 @@ export default function SettingsPage() {
             <Field label="Address"><input className="tb-input" value={form.address} onChange={(e) => set('address', e.target.value)} /></Field>
             <div className="grid grid-cols-2 gap-3">
               <Field label="Website"><input className="tb-input" value={form.website} onChange={(e) => set('website', e.target.value)} /></Field>
-              <Field label="Price Level">
-                <select className="tb-input" value={form.priceLevel} onChange={(e) => set('priceLevel', Number(e.target.value))}>
-                  {PRICE_LEVELS.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
-                </select>
+              <Field label="Average Price Per Person (₾)">
+                <div className="flex items-center gap-2">
+                  <NumberField min={0} className="tb-input flex-1" placeholder="From" value={form.priceMin} onChange={(n) => set('priceMin', n)} />
+                  <span className="text-slate-400">–</span>
+                  <NumberField min={0} className="tb-input flex-1" placeholder="To" value={form.priceMax} onChange={(n) => set('priceMax', n)} />
+                </div>
               </Field>
             </div>
             <Field label="Description">
@@ -295,15 +299,16 @@ export default function SettingsPage() {
 
             {/* Category selector — applies to both upload and URL methods */}
             <Field label="Category">
-              <select
-                className="tb-input"
+              <Select
+                className="w-full"
+                ariaLabel="Category"
                 value={newImageType}
-                onChange={(e) => setNewImageType(e.target.value as typeof newImageType)}
-              >
-                {IMAGE_TYPES.map((t) => (
-                  <option key={t} value={t}>{t.charAt(0) + t.slice(1).toLowerCase()}</option>
-                ))}
-              </select>
+                onChange={(v) => setNewImageType(v as typeof newImageType)}
+                options={IMAGE_TYPES.map((t) => ({
+                  value: t,
+                  label: t.charAt(0) + t.slice(1).toLowerCase(),
+                }))}
+              />
             </Field>
 
             {/* Upload from device */}
@@ -464,7 +469,12 @@ export default function SettingsPage() {
                 <button
                   key={opt.v}
                   type="button"
-                  onClick={() => set('resourceMode', opt.v)}
+                  onClick={() => {
+                    set('resourceMode', opt.v);
+                    // The mode is the single source of truth for table picking:
+                    // Floor Plan = customers choose; Resource List = staff assign.
+                    set('allowTableSelection', opt.v === 'FLOOR_PLAN');
+                  }}
                   className={`text-left rounded-xl border p-4 transition-colors ${
                     form.resourceMode === opt.v
                       ? 'border-indigo-500 bg-indigo-50 ring-1 ring-indigo-300'
@@ -476,9 +486,13 @@ export default function SettingsPage() {
                 </button>
               ))}
             </div>
-            {form.resourceMode === 'RESOURCE_LIST' && (
+            {form.resourceMode === 'RESOURCE_LIST' ? (
               <p className="text-xs text-indigo-600">
-                Manage your resources in the <span className="font-medium">Resources</span> tab. Customers won't pick a specific resource — staff assign them.
+                Manage your resources in the <span className="font-medium">Resources</span> tab. Customers won't pick a table — staff assign them.
+              </p>
+            ) : (
+              <p className="text-xs text-indigo-600">
+                Customers pick an exact table on your floor plan when booking.
               </p>
             )}
           </div>
@@ -493,19 +507,17 @@ export default function SettingsPage() {
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
-            <h3 className="font-semibold text-slate-700">Booking Settings</h3>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={form.allowTableSelection} onChange={(e) => set('allowTableSelection', e.target.checked)} />
-              Let customers pick their own table
-            </label>
-            <label className="flex items-center gap-2 text-sm text-slate-700">
-              <input type="checkbox" checked={form.autoConfirm} onChange={(e) => set('autoConfirm', e.target.checked)} />
-              Auto-confirm reservations
-            </label>
+            <h3 className="font-semibold text-slate-700">Visibility</h3>
             <label className="flex items-center gap-2 text-sm text-slate-700">
               <input type="checkbox" checked={form.published} onChange={(e) => set('published', e.target.checked)} />
               Published (visible to customers)
             </label>
+            <p className="text-xs text-slate-400">
+              Whether customers pick their own table is set by the{' '}
+              <span className="font-medium text-slate-500">Reservation Configuration</span> above.
+              Durations, confirmation mode, capacity and required fields live in{' '}
+              <span className="font-medium text-slate-500">Reservation Settings</span>.
+            </p>
           </div>
 
           <div className="flex items-center gap-3">

@@ -9,6 +9,9 @@ import ReservationsPage from './pages/ReservationsPage';
 import FloorPlanPage from './pages/FloorPlanPage';
 import BlockedPeriodsPage from './pages/BlockedPeriodsPage';
 import SettingsPage from './pages/SettingsPage';
+import ReservationSettingsPage from './pages/ReservationSettingsPage';
+import AccountPage from './pages/AccountPage';
+import CustomerProfilePage from './pages/CustomerProfilePage';
 
 // Wraps protected pages in the shell, and forces first-login users into setup.
 function Protected({ children }: { children: React.ReactNode }) {
@@ -40,6 +43,9 @@ export default function App() {
       <Route path="/floor-plan" element={<Protected><FloorPlanPage /></Protected>} />
       <Route path="/blocked" element={<Protected><BlockedPeriodsPage /></Protected>} />
       <Route path="/settings" element={<Protected><SettingsPage /></Protected>} />
+      <Route path="/reservation-settings" element={<Protected><ReservationSettingsPage /></Protected>} />
+      <Route path="/account" element={<Protected><AccountPage /></Protected>} />
+      <Route path="/customers/:phone" element={<Protected><CustomerProfilePage /></Protected>} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

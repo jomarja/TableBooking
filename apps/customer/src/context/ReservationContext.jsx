@@ -46,38 +46,42 @@ export function ReservationProvider({ children }) {
   // if the API is unreachable, keeping the demo flow resilient.
   const confirmReservation = async () => {
     const { restaurant, date, guests, table, timeSlot, personalInfo } = reservationData;
-    let id = 'TB-' + Date.now().toString(36).toUpperCase();
 
-    try {
-      if (restaurant?.id && date && timeSlot) {
-        const created = await api.createReservation({
-          restaurantId: restaurant.id,
-          tableId: table?.id,
-          date,
-          startTime: timeSlot.start,
-          endTime: timeSlot.end,
-          guests: guests || 2,
-          name: personalInfo?.name || '',
-          surname: personalInfo?.surname || '',
-          phone: personalInfo?.phone || '',
-          occasion: personalInfo?.occasion || undefined,
-          specialRequest: personalInfo?.specialRequest || undefined,
-        });
-        if (created?.id) id = created.id;
-      }
-    } catch (e) {
-      // Keep the local fallback id; surface nothing blocking to the user.
-      console.warn('Reservation API call failed, using local record:', e.message);
+    // No restaurant context (shouldn't happen in the normal flow) — keep a
+    // local-only record so the demo doesn't dead-end.
+    if (!(restaurant?.id && date && timeSlot)) {
+      const id = 'TB-' + Date.now().toString(36).toUpperCase();
+      const local = { ...reservationData, reservationId: id, status: 'CONFIRMED', createdAt: new Date().toISOString() };
+      setAllReservations((prev) => [...prev, local]);
+      setReservationData((prev) => ({ ...prev, reservationId: id, status: 'CONFIRMED' }));
+      return { id, status: 'CONFIRMED' };
     }
 
-    const newReservation = {
-      ...reservationData,
-      reservationId: id,
-      createdAt: new Date().toISOString(),
-    };
-    setAllReservations(prev => [...prev, newReservation]);
-    setReservationData(prev => ({ ...prev, reservationId: id }));
-    return id;
+    // Persist to the backend. Any rejection (group size, capacity, lead time,
+    // online disabled, etc.) THROWS so the caller can show it — we must never
+    // fake success, or the restaurant's reservation rules would be invisible.
+    const created = await api.createReservation({
+      restaurantId: restaurant.id,
+      tableId: table?.id,
+      date,
+      startTime: timeSlot.start,
+      endTime: timeSlot.end,
+      guests: guests || 2,
+      name: personalInfo?.name || '',
+      surname: personalInfo?.surname || '',
+      phone: personalInfo?.phone || '',
+      email: personalInfo?.email || undefined,
+      address: personalInfo?.address || undefined,
+      occasion: personalInfo?.occasion || undefined,
+      specialRequest: personalInfo?.specialRequest || undefined,
+    });
+
+    const id = created?.id || 'TB-' + Date.now().toString(36).toUpperCase();
+    const status = created?.status || 'CONFIRMED';
+    const newReservation = { ...reservationData, reservationId: id, status, createdAt: new Date().toISOString() };
+    setAllReservations((prev) => [...prev, newReservation]);
+    setReservationData((prev) => ({ ...prev, reservationId: id, status }));
+    return { id, status };
   };
 
   return (

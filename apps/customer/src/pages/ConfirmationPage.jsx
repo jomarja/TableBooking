@@ -30,6 +30,9 @@ function ConfettiParticle({ delay, x, color }) {
 export default function ConfirmationPage() {
   const { reservationData, resetReservation } = useReservation();
   const navigate = useNavigate();
+  // Manual/hybrid approval restaurants create the booking as PENDING — be
+  // honest about that instead of claiming it's confirmed.
+  const pending = reservationData.status === 'PENDING';
   const [showConfetti, setShowConfetti] = useState(true);
 
   const confettiColors = [
@@ -126,7 +129,7 @@ export default function ConfirmationPage() {
               transition={{ delay: 0.6 }}
               className="text-2xl sm:text-3xl font-bold text-gray-900 mb-2"
             >
-              Table Reserved Successfully!
+              {pending ? 'Reservation Request Received!' : 'Table Reserved Successfully!'}
             </motion.h2>
 
             <motion.p
@@ -135,7 +138,9 @@ export default function ConfirmationPage() {
               transition={{ delay: 0.7 }}
               className="text-gray-500 mb-8"
             >
-              Your reservation has been confirmed.
+              {pending
+                ? "Your request has been sent. The restaurant will confirm it shortly — you'll get an SMS once it's approved."
+                : 'Your reservation has been confirmed.'}
             </motion.p>
 
             {/* Reservation Details Card */}

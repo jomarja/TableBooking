@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw, FiEdit2, FiUserCheck, FiCheckCircle, FiXCircle, FiClock } from 'react-icons/fi';
+import { useSearchParams } from 'react-router-dom';
+import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw, FiEdit2, FiUserCheck, FiCheckCircle, FiXCircle, FiClock, FiCopy, FiTrash2 } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod, Reservation, Restaurant, TableModel } from '../types';
@@ -132,6 +133,8 @@ const VISUAL_DOT: Record<ResVisual, string> = {
 
 export default function ReservationsPage() {
   const { restaurant } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [focusId, setFocusId] = useState<string | null>(null);
   const [view, setView] = useState<View>('table');
   const [date, setDate] = useState(todayStr());
   const [reservations, setReservations] = useState<Reservation[]>([]);
@@ -153,6 +156,38 @@ export default function ReservationsPage() {
     });
   }, []);
   const now = useNow();
+
+  // Deep link from the dashboard "Show in scheduler": jump to the booking's
+  // date, switch to the table view, then briefly highlight it. Params are
+  // consumed so a refresh doesn't re-trigger.
+  useEffect(() => {
+    const d = searchParams.get('date');
+    const focus = searchParams.get('focus');
+    if (!d && !focus) return;
+    if (d) setDate(d);
+    if (focus) {
+      setFocusId(focus);
+      setView('table');
+    }
+    setSearchParams({}, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Once the target day's reservations are rendered, scroll the highlighted
+  // card into view and clear the highlight after a few seconds.
+  useEffect(() => {
+    if (!focusId) return;
+    const scrollT = setTimeout(() => {
+      document
+        .querySelector(`[data-reservation-id="${focusId}"]`)
+        ?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+    }, 350);
+    const clearT = setTimeout(() => setFocusId(null), 4500);
+    return () => {
+      clearTimeout(scrollT);
+      clearTimeout(clearT);
+    };
+  }, [focusId, reservations, date]);
 
   // The timeline spans WINDOW_DAYS consecutive days laid out on one continuous
   // axis (day 0 at minute 0, day 1 at minute 1440, …). Each day carries its own
@@ -456,6 +491,7 @@ export default function ReservationsPage() {
           zoneName={zoneName}
           tableLabel={tableLabel}
           showNow={showNowLine}
+          focusId={focusId}
           onEdit={setEditing}
           onChanged={onSaved}
           onHistory={recordAction}
@@ -546,6 +582,7 @@ function TableScheduler({
   zoneName,
   tableLabel,
   showNow,
+  focusId,
   onEdit,
   onChanged,
   onHistory,
@@ -563,6 +600,7 @@ function TableScheduler({
   zoneName: (id: string | null) => string;
   tableLabel: (t: TableModel) => string;
   showNow: boolean;
+  focusId: string | null;
   onEdit: (r: Reservation) => void;
   onChanged: (notify: boolean, id?: string) => void;
   onHistory: (entry: HistoryEntry) => void;
@@ -1449,6 +1487,7 @@ function TableScheduler({
                           <div
                             key={r.id}
                             data-reservation
+                            data-reservation-id={r.id}
                             onPointerDown={(e) => {
                               if (e.button !== 0) return; // left-button only; right opens the menu
                               e.preventDefault();
@@ -1474,7 +1513,7 @@ function TableScheduler({
                                   : isPast
                                     ? 'shadow-sm opacity-80 hover:opacity-100 hover:shadow-lg'
                                     : 'shadow-sm hover:shadow-lg'
-                            }`}
+                            } ${r.id === focusId ? 'ring-4 ring-amber-400 z-30' : ''}`}
                             style={{
                               // Position via transform (not `left`) so moving the
                               // block during a drag is a compositor-only change —
@@ -1624,7 +1663,7 @@ function TableScheduler({
           className="fixed z-50 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 text-sm"
           style={{
             left: Math.min(ctxMenu.x, window.innerWidth - 200),
-            top: Math.min(ctxMenu.y, window.innerHeight - 180),
+            top: Math.min(ctxMenu.y, window.innerHeight - 260),
           }}
         >
           <button
@@ -1657,6 +1696,42 @@ function TableScheduler({
               <FiXCircle size={14} /> Cancel reservation
             </button>
           )}
+          <div className="my-1 border-t border-slate-100" />
+          <button
+            onClick={async () => {
+              const r = ctxMenu.res;
+              setCtxMenu(null);
+              await api.createReservation({
+                name: r.name,
+                surname: r.surname,
+                phone: r.phone,
+                guests: r.guests,
+                tableId: r.tableId ?? undefined,
+                date: r.date,
+                startTime: r.startTime,
+                endTime: r.endTime,
+                occasion: r.occasion ?? undefined,
+                customerNotes: r.customerNotes ?? undefined,
+                channel: r.channel,
+              });
+              onChanged(false);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-slate-50 flex items-center gap-2 text-slate-700"
+          >
+            <FiCopy size={14} /> Duplicate
+          </button>
+          <button
+            onClick={async () => {
+              const r = ctxMenu.res;
+              if (!confirm('Delete this reservation? This cannot be undone.')) return;
+              setCtxMenu(null);
+              await api.deleteReservation(r.id);
+              onChanged(false);
+            }}
+            className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600"
+          >
+            <FiTrash2 size={14} /> Delete
+          </button>
         </div>
       </>
     )}

@@ -14,6 +14,8 @@ import {
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod } from '../types';
+import { NumberField } from '../components/NumberField';
+import { Select } from '../components/Select';
 
 const REASONS = ['Private Event', 'Wedding', 'Cleaning', 'Maintenance', 'Staff Meeting'];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -442,8 +444,11 @@ function BlockForm({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-100">
           <h3 className="text-lg font-bold text-slate-800">{isEdit ? 'Edit Blocked Period' : 'New Blocked Period'}</h3>
           <button onClick={onClose} className="text-slate-400 hover:text-slate-600"><FiX size={20} /></button>
@@ -452,9 +457,13 @@ function BlockForm({
         <div className="p-6 space-y-4">
           <label className="block">
             <span className="text-xs font-medium text-slate-600 mb-1 block">Reason</span>
-            <select className="tb-input" value={reason} onChange={(e) => setReason(e.target.value)}>
-              {REASONS.map((r) => <option key={r}>{r}</option>)}
-            </select>
+            <Select
+              value={reason}
+              onChange={(v) => setReason(v)}
+              options={REASONS.map((r) => ({ value: r, label: r }))}
+              className="w-full"
+              ariaLabel="Reason"
+            />
           </label>
 
           {/* Scope */}
@@ -474,9 +483,13 @@ function BlockForm({
               ))}
             </div>
             {scope === 'ZONE' ? (
-              <select className="tb-input" value={zoneId} onChange={(e) => setZoneId(e.target.value)}>
-                {zones.map((z) => <option key={z.id} value={z.id}>{z.name}</option>)}
-              </select>
+              <Select
+                value={zoneId}
+                onChange={(v) => setZoneId(v)}
+                options={zones.map((z) => ({ value: z.id, label: z.name }))}
+                className="w-full"
+                ariaLabel="Applies to"
+              />
             ) : (
               <div className="flex flex-wrap gap-2">
                 {tables.map((t) => (
@@ -516,22 +529,31 @@ function BlockForm({
               <input type="date" className="tb-input" value={date} onChange={(e) => setDate(e.target.value)} />
             ) : (
               <div className="flex gap-2">
-                <select className="tb-input" value={freq} onChange={(e) => setFreq(e.target.value as 'WEEKLY' | 'MONTHLY')}>
-                  <option value="WEEKLY">Weekly</option>
-                  <option value="MONTHLY">Monthly</option>
-                </select>
+                <Select
+                  value={freq}
+                  onChange={(v) => setFreq(v as 'WEEKLY' | 'MONTHLY')}
+                  options={[
+                    { value: 'WEEKLY', label: 'Weekly' },
+                    { value: 'MONTHLY', label: 'Monthly' },
+                  ]}
+                  className="w-full"
+                  ariaLabel="Frequency"
+                />
                 {freq === 'WEEKLY' ? (
-                  <select className="tb-input" value={byWeekday} onChange={(e) => setByWeekday(Number(e.target.value))}>
-                    {WEEKDAYS.map((d, i) => <option key={d} value={i}>{d}</option>)}
-                  </select>
+                  <Select
+                    value={String(byWeekday)}
+                    onChange={(v) => setByWeekday(Number(v))}
+                    options={WEEKDAYS.map((d, i) => ({ value: String(i), label: d }))}
+                    className="w-full"
+                    ariaLabel="Day of week"
+                  />
                 ) : (
-                  <input
-                    type="number"
+                  <NumberField
                     min={1}
                     max={28}
                     className="tb-input"
                     value={byMonthDay}
-                    onChange={(e) => setByMonthDay(Number(e.target.value))}
+                    onChange={(n) => setByMonthDay(n)}
                   />
                 )}
               </div>

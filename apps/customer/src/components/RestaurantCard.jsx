@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { FiStar, FiHeart, FiMapPin, FiClock } from "react-icons/fi";
 
-export default function RestaurantCard({ restaurant }) {
+export default function RestaurantCard({ restaurant, availability }) {
   const [isFavorite, setIsFavorite] = useState(false);
 
   const {
@@ -15,8 +15,12 @@ export default function RestaurantCard({ restaurant }) {
     openingTime,
     closingTime,
     cuisine,
+    cuisines,
     priceRange,
   } = restaurant;
+
+  // Show every cuisine the owner selected (multi-select), not just the first.
+  const cuisineList = cuisines?.length ? cuisines : cuisine ? [cuisine] : [];
 
   return (
     <motion.article
@@ -36,10 +40,31 @@ export default function RestaurantCard({ restaurant }) {
           className="w-full h-full object-cover transition-transform duration-300 hover:scale-105"
         />
 
-        {/* Price range badge */}
-        <span className="absolute top-3 left-3 bg-white/90 backdrop-blur-sm text-gray-800 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
-          {priceRange}
-        </span>
+        {/* Price range badge — the restaurant's average meal price range */}
+        {priceRange && (
+          <span className="absolute top-3 left-3 bg-white/90 backdrop-blur-sm text-gray-800 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm">
+            {priceRange}
+          </span>
+        )}
+
+        {/* Today's availability badge — instant "can I book here today?" signal */}
+        {availability?.status && availability.status !== 'available' && (
+          <span
+            className={`absolute bottom-3 left-3 inline-flex items-center gap-1 text-xs font-semibold px-2.5 py-1 rounded-full shadow-sm ${
+              availability.status === 'fully_booked'
+                ? 'bg-red-500 text-white'
+                : availability.status === 'limited'
+                  ? 'bg-orange-500 text-white'
+                  : 'bg-gray-500 text-white'
+            }`}
+          >
+            {availability.status === 'fully_booked'
+              ? 'Fully Booked Today'
+              : availability.status === 'limited'
+                ? `Limited${availability.freeTables ? ` · ${availability.freeTables} left` : ''}`
+                : 'Closed Today'}
+          </span>
+        )}
       </Link>
 
       {/* Favorite button */}
@@ -89,12 +114,24 @@ export default function RestaurantCard({ restaurant }) {
           <span>{openingTime} - {closingTime}</span>
         </div>
 
-        {/* Cuisine badge */}
-        <div className="mt-3">
-          <span className="inline-block bg-emerald-50 text-emerald-700 text-xs font-medium px-2.5 py-1 rounded-full">
-            {cuisine}
-          </span>
-        </div>
+        {/* Cuisine badges — all selected cuisines */}
+        {cuisineList.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {cuisineList.slice(0, 3).map((c) => (
+              <span
+                key={c}
+                className="inline-block bg-emerald-50 text-emerald-700 text-xs font-medium px-2.5 py-1 rounded-full capitalize"
+              >
+                {c}
+              </span>
+            ))}
+            {cuisineList.length > 3 && (
+              <span className="inline-block text-gray-400 text-xs px-1 py-1">
+                +{cuisineList.length - 3}
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Quick Reserve button */}
         <div className="mt-auto pt-4">

@@ -3,9 +3,51 @@ import { FiSave, FiPlus, FiX } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { FloorPlanBuilder, type BuilderState } from '../components/FloorPlanBuilder';
+import type { FloorElement, TableModel } from '../types';
 
 let zc = 0;
 const zid = () => `zone_${Date.now().toString(36)}_${zc++}`;
+
+// Every table the scheduler/Resources page knows about must have a draggable
+// floor-plan element. Tables added outside the builder (e.g. via Settings →
+// Resources) have none, so they'd render stuck & unmovable. Here we synthesize
+// an element for each un-placed table, spread on a grid so they don't stack,
+// and align the table's own position to it. This keeps tables unified across
+// the scheduler, Resources page, and floor plan.
+function withPlacedTables(tables: TableModel[], elements: FloorElement[]) {
+  const placed = new Set(
+    elements
+      .filter((e) => e.type === 'table' && e.metadata?.tableId)
+      .map((e) => e.metadata!.tableId as string),
+  );
+  const unplaced = tables.filter((t) => !placed.has(t.id));
+  if (unplaced.length === 0) return { tables, elements };
+
+  const COLS = 8;
+  const newEls: FloorElement[] = [];
+  const movedPos = new Map<string, { x: number; y: number }>();
+  unplaced.forEach((t, i) => {
+    const w = t.size?.width ?? 8;
+    const h = t.size?.height ?? 8;
+    const x = 5 + (i % COLS) * 11; // top-left, in 0..100 canvas coords
+    const y = 6 + Math.floor(i / COLS) * 13;
+    newEls.push({
+      id: `el_${t.id}`,
+      type: 'table',
+      position: { x, y },
+      size: { width: w, height: h },
+      rotation: t.rotation ?? 0,
+      metadata: { tableId: t.id, number: t.number },
+    });
+    movedPos.set(t.id, { x: x + w / 2, y: y + h / 2 });
+  });
+  return {
+    tables: tables.map((t) =>
+      movedPos.has(t.id) ? { ...t, position: movedPos.get(t.id)! } : t,
+    ),
+    elements: [...elements, ...newEls],
+  };
+}
 
 export default function FloorPlanPage() {
   const { restaurant, refresh } = useAuth();
@@ -15,9 +57,10 @@ export default function FloorPlanPage() {
 
   useEffect(() => {
     if (!restaurant) return;
+    const placed = withPlacedTables(restaurant.tables, restaurant.floorPlan.elements);
     setState({
-      elements: restaurant.floorPlan.elements,
-      tables: restaurant.tables,
+      elements: placed.elements,
+      tables: placed.tables,
       zones: restaurant.zones,
       background: restaurant.floorPlan.background,
     });
@@ -48,6 +91,22 @@ export default function FloorPlanPage() {
       );
       await api.setTables(restaurant.id, state.tables);
       await api.setFloorPlan(restaurant.id, state.elements, state.background);
+      // Per-table minCapacity isn't a Table column — persist it into
+      // reservationRules.resourceMeta (preserving any existing descriptions).
+      const existingMeta = (restaurant.reservationRules?.resourceMeta || {}) as Record<
+        string,
+        { name?: string; description?: string; minCapacity?: number }
+      >;
+      const nextMeta: Record<string, { name?: string; description?: string; minCapacity?: number }> = {};
+      for (const t of state.tables) {
+        const entry = { ...(existingMeta[t.id] || {}) };
+        if (t.minCapacity && t.minCapacity > 1) entry.minCapacity = Math.min(t.minCapacity, t.capacity);
+        else delete entry.minCapacity;
+        if (Object.keys(entry).length) nextMeta[t.id] = entry;
+      }
+      await api.updateRestaurant(restaurant.id, {
+        reservationRules: { ...(restaurant.reservationRules || {}), resourceMeta: nextMeta },
+      } as never);
       await refresh();
       setSaved(true);
       setTimeout(() => setSaved(false), 3000);

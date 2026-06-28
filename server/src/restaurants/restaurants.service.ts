@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import {
   serializeRestaurant,
 } from '../common/serializers';
+import { AuditService, type AuditActor } from '../audit/audit.service';
 
 const restaurantInclude = {
   images: { orderBy: { sortOrder: 'asc' as const } },
@@ -18,7 +19,10 @@ const restaurantInclude = {
 
 @Injectable()
 export class RestaurantsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private audit: AuditService,
+  ) {}
 
   /** Public list — only approved + published, not archived. */
   async findAllPublic() {
@@ -56,8 +60,16 @@ export class RestaurantsService {
   }
 
   /** Update core info / hours / config / publish. */
-  async update(id: string, userRestaurantId: string | undefined, dto: any) {
+  async update(
+    id: string,
+    userRestaurantId: string | undefined,
+    dto: any,
+    actor?: AuditActor,
+  ) {
     this.assertOwnership(id, userRestaurantId);
+    const before = actor
+      ? await this.prisma.restaurant.findUnique({ where: { id } })
+      : null;
     const data: any = {};
     const scalarFields = [
       'name',
@@ -106,10 +118,60 @@ export class RestaurantsService {
     }
 
     await this.prisma.restaurant.update({ where: { id }, data });
+    if (actor && before) await this.auditRestaurantUpdate(id, before, dto, actor);
     return this.findOneForStaff(id);
   }
 
-  /** Replace zones for a restaurant (used by builder/wizard). */
+  /** Audit accurate (real-diff) opening-hours and settings changes. */
+  private async auditRestaurantUpdate(
+    id: string,
+    before: any,
+    dto: any,
+    actor: AuditActor,
+  ) {
+    const hoursFields = ['openingTime', 'kitchenClosing', 'closingTime'];
+    const hoursChanged =
+      hoursFields.some((f) => dto[f] !== undefined && dto[f] !== before[f]) ||
+      (dto.openingHours !== undefined &&
+        JSON.stringify(dto.openingHours) !== JSON.stringify(before.openingHours));
+    if (hoursChanged) {
+      await this.audit.log({
+        user: actor.user,
+        ip: actor.ip,
+        action: 'Opening Hours Changed',
+        restaurantId: id,
+        oldValue: `${before.openingTime}–${before.closingTime}`,
+        newValue: `${dto.openingTime ?? before.openingTime}–${dto.closingTime ?? before.closingTime}`,
+      });
+    }
+    const settingFields = [
+      'name', 'cuisine', 'address', 'website', 'phone', 'priceRange',
+      'priceLevel', 'allowTableSelection', 'maxGuests', 'published',
+      'outdoorSeating', 'familyFriendly', 'description', 'restDays', 'cuisines',
+      'reservationRules', 'reservationConfirmationPolicy', 'capacityRules',
+    ];
+    const changed = settingFields.filter(
+      (f) =>
+        dto[f] !== undefined &&
+        JSON.stringify(dto[f]) !== JSON.stringify(before[f]),
+    );
+    if (changed.length) {
+      await this.audit.log({
+        user: actor.user,
+        ip: actor.ip,
+        action: 'Restaurant Settings Changed',
+        restaurantId: id,
+        target: changed.join(', '),
+        newValue: changed.join(', '),
+      });
+    }
+  }
+
+  /** Reconcile zones (update in place, create new, delete removed) — like
+   *  setTables. A delete-and-recreate would null every table's zoneId via
+   *  onDelete: SetNull, unassigning tables; reconciling keeps kept zones' ids
+   *  so table↔zone links survive. Shared by the wizard, floor plan and the
+   *  Resources page, so zones stay in sync everywhere. */
   async setZones(
     id: string,
     userRestaurantId: string | undefined,
@@ -117,11 +179,26 @@ export class RestaurantsService {
   ) {
     this.assertOwnership(id, userRestaurantId);
     await this.prisma.$transaction(async (tx) => {
-      await tx.zone.deleteMany({ where: { restaurantId: id } });
+      const existing = await tx.zone.findMany({
+        where: { restaurantId: id },
+        select: { id: true },
+      });
+      const existingIds = new Set(existing.map((z) => z.id));
+      const incomingIds = new Set<string>();
       for (const z of zones) {
-        await tx.zone.create({
-          data: { id: z.id, restaurantId: id, name: z.name },
-        });
+        if (z.id && existingIds.has(z.id)) {
+          incomingIds.add(z.id);
+          await tx.zone.update({ where: { id: z.id }, data: { name: z.name } });
+        } else {
+          const created = await tx.zone.create({
+            data: { id: z.id || undefined, restaurantId: id, name: z.name },
+          });
+          incomingIds.add(created.id);
+        }
+      }
+      const toDelete = [...existingIds].filter((eid) => !incomingIds.has(eid));
+      if (toDelete.length) {
+        await tx.zone.deleteMany({ where: { id: { in: toDelete } } });
       }
     });
     return this.findOneForStaff(id);
@@ -138,6 +215,7 @@ export class RestaurantsService {
     id: string,
     userRestaurantId: string | undefined,
     tables: any[],
+    actor?: AuditActor,
   ) {
     this.assertOwnership(id, userRestaurantId);
     const fields = (t: any) => ({
@@ -153,12 +231,13 @@ export class RestaurantsService {
       height: t.size?.height ?? t.height ?? 8,
       rotation: t.rotation ?? 0,
     });
+    // Snapshot before-state so we can audit capacity changes / adds / removes.
+    const before = await this.prisma.table.findMany({
+      where: { restaurantId: id },
+      select: { id: true, number: true, capacity: true },
+    });
     await this.prisma.$transaction(async (tx) => {
-      const existing = await tx.table.findMany({
-        where: { restaurantId: id },
-        select: { id: true },
-      });
-      const existingIds = new Set(existing.map((t) => t.id));
+      const existingIds = new Set(before.map((t) => t.id));
       const incomingIds = new Set<string>();
 
       for (const t of tables) {
@@ -183,7 +262,55 @@ export class RestaurantsService {
         await tx.table.deleteMany({ where: { id: { in: toDelete } } });
       }
     });
+    if (actor) await this.auditTableChanges(id, before, tables, actor);
     return this.findOneForStaff(id);
+  }
+
+  /** Emit audit entries for table capacity changes, additions and removals. */
+  private async auditTableChanges(
+    restaurantId: string,
+    before: { id: string; number: number; capacity: number }[],
+    incoming: any[],
+    actor: AuditActor,
+  ) {
+    const beforeById = new Map(before.map((t) => [t.id, t]));
+    const incomingIds = new Set<string>();
+    for (const t of incoming) {
+      if (t.id) incomingIds.add(t.id);
+      const old = t.id ? beforeById.get(t.id) : undefined;
+      if (old) {
+        if (typeof t.capacity === 'number' && t.capacity !== old.capacity) {
+          await this.audit.log({
+            user: actor.user,
+            ip: actor.ip,
+            action: 'Table Capacity Changed',
+            restaurantId,
+            target: `Table ${t.number ?? old.number}`,
+            oldValue: `${old.capacity} seats`,
+            newValue: `${t.capacity} seats`,
+          });
+        }
+      } else {
+        await this.audit.log({
+          user: actor.user,
+          ip: actor.ip,
+          action: 'Resource Created',
+          restaurantId,
+          target: `Table ${t.number ?? ''}`.trim(),
+        });
+      }
+    }
+    for (const old of before) {
+      if (!incomingIds.has(old.id)) {
+        await this.audit.log({
+          user: actor.user,
+          ip: actor.ip,
+          action: 'Resource Deleted',
+          restaurantId,
+          target: `Table ${old.number}`,
+        });
+      }
+    }
   }
 
   /** Replace floor-plan elements (+ optional background). */
@@ -282,6 +409,7 @@ export class RestaurantsService {
     });
     if (!r) throw new NotFoundException('Restaurant not found');
     const rules: any = r.reservationRules ?? {};
+    const cap: any = r.capacityRules ?? {};
     return {
       openingTime: r.openingTime,
       kitchenClosing: r.kitchenClosing,
@@ -289,6 +417,19 @@ export class RestaurantsService {
       maxGuests: r.maxGuests,
       defaultDuration: rules.defaultDurationMinutes ?? 120,
       durationByGuests: rules.durationByGuests ?? [],
+      // Online rules so the customer app reflects every reservation setting.
+      minGroupSize: rules.minGroupSize ?? 1,
+      maxGroupSize: rules.maxGroupSize ?? r.maxGuests ?? 20,
+      // The per-reservation guest cap (capacityRules + maxGuests scalar) — the
+      // customer guest selector caps at the smallest of these.
+      maxGuestsPerReservation: cap.maxGuestsPerReservation ?? r.maxGuests ?? null,
+      intervalMinutes: rules.intervalMinutes ?? 15,
+      onlineEnabled: rules.onlineEnabled !== false,
+      minLeadTimeMinutes: rules.minLeadTimeMinutes ?? 0,
+      maxBookingWindowDays: rules.maxBookingWindowDays ?? 0,
+      sameDayCutoff: rules.sameDayCutoff ?? { mode: 'disabled' },
+      requiredFields: rules.requiredFields ?? null,
+      reservationNotice: rules.reservationNotice ?? '',
       allowTableSelection: r.allowTableSelection,
       reservationConfirmationPolicy: r.reservationConfirmationPolicy ?? {
         autoConfirm: true,

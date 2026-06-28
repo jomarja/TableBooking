@@ -15,4 +15,5 @@ export const categories = [
   { id: 'fastfood', name: 'Fast Food', icon: '🍟' },
   { id: 'mexican', name: 'Mexican', icon: '🌮' },
   { id: 'indian', name: 'Indian', icon: '🍛' },
+  { id: 'mediterranean', name: 'Mediterranean', icon: '🫒' },
 ];

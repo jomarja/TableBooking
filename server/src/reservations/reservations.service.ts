@@ -8,6 +8,7 @@ import {
   serializeReservationFull,
   serializeReservationPublic,
 } from '../common/serializers';
+import { CustomerMetaService, type CustomerMeta } from './customer-meta.service';
 
 function toMinutes(t: string): number {
   const [h, m] = t.split(':').map(Number);
@@ -16,7 +17,10 @@ function toMinutes(t: string): number {
 
 @Injectable()
 export class ReservationsService {
-  constructor(private prisma: PrismaService) {}
+  constructor(
+    private prisma: PrismaService,
+    private customerMeta: CustomerMetaService,
+  ) {}
 
   /** Public booking from the customer app. */
   async createCustomer(dto: any) {
@@ -25,11 +29,91 @@ export class ReservationsService {
     });
     if (!restaurant) throw new NotFoundException('Restaurant not found');
 
+    // ---- Online reservation rules (configured in Reservation Settings) ----
+    const rules: any = restaurant.reservationRules ?? {};
+    if (rules.onlineEnabled === false) {
+      throw new BadRequestException(
+        'Online reservations are currently unavailable. Please contact the restaurant.',
+      );
+    }
+    if (rules.minGroupSize && dto.guests < rules.minGroupSize) {
+      throw new BadRequestException(
+        `The minimum group size for online booking is ${rules.minGroupSize}.`,
+      );
+    }
+    if (rules.maxGroupSize && dto.guests > rules.maxGroupSize) {
+      throw new BadRequestException('For larger groups please contact the restaurant directly.');
+    }
+    if (rules.minLeadTimeMinutes) {
+      const startMs = new Date(`${dto.date}T${dto.startTime}:00`).getTime();
+      if (!Number.isNaN(startMs) && startMs - Date.now() < rules.minLeadTimeMinutes * 60000) {
+        throw new BadRequestException(
+          `Please book at least ${rules.minLeadTimeMinutes} minutes in advance.`,
+        );
+      }
+    }
+    const todayStr = new Date().toISOString().slice(0, 10);
+    if (rules.maxBookingWindowDays) {
+      const max = new Date();
+      max.setDate(max.getDate() + rules.maxBookingWindowDays);
+      if (dto.date > max.toISOString().slice(0, 10)) {
+        throw new BadRequestException(
+          `Reservations can only be made up to ${rules.maxBookingWindowDays} days ahead.`,
+        );
+      }
+    }
+    if (dto.date === todayStr && rules.sameDayCutoff && rules.sameDayCutoff.mode && rules.sameDayCutoff.mode !== 'disabled') {
+      const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+      let cutoffMin: number | null = null;
+      if (rules.sameDayCutoff.mode === 'time' && rules.sameDayCutoff.time) {
+        cutoffMin = toMinutes(rules.sameDayCutoff.time);
+      } else if (rules.sameDayCutoff.mode === 'beforeClose' && rules.sameDayCutoff.hoursBeforeClose != null) {
+        cutoffMin = toMinutes(restaurant.closingTime) - rules.sameDayCutoff.hoursBeforeClose * 60;
+      }
+      if (cutoffMin != null && nowMin > cutoffMin) {
+        throw new BadRequestException('Same-day online reservations are no longer available for today.');
+      }
+    }
+
     const capacityRules: any = restaurant.capacityRules ?? {};
+    if (capacityRules.maxOnlineReservationsPerDay) {
+      const onlineCount = await this.prisma.reservation.count({
+        where: {
+          restaurantId: dto.restaurantId,
+          date: dto.date,
+          source: 'CUSTOMER',
+          isArchived: false,
+          status: { notIn: ['CANCELLED'] },
+        },
+      });
+      if (onlineCount >= capacityRules.maxOnlineReservationsPerDay) {
+        throw new BadRequestException(
+          'Online reservations for this day are full. Please contact the restaurant.',
+        );
+      }
+    }
     const maxGuests =
       capacityRules.maxGuestsPerReservation ?? restaurant.maxGuests ?? 20;
     if (dto.guests > maxGuests) {
       throw new BadRequestException(`Maximum ${maxGuests} guests per reservation`);
+    }
+
+    // Per-table fit: a chosen table only takes parties within [minCapacity..
+    // capacity]. minCapacity (optional) lives in reservationRules.resourceMeta;
+    // absent means a floor of 1 (anyone can book). Mirrors the customer UI.
+    if (dto.tableId) {
+      const table = await this.prisma.table.findFirst({
+        where: { id: dto.tableId, restaurantId: dto.restaurantId },
+      });
+      if (table) {
+        const minCap = rules.resourceMeta?.[table.id]?.minCapacity || 1;
+        if (dto.guests < minCap) {
+          throw new BadRequestException(`This table is for groups of ${minCap} or more.`);
+        }
+        if (dto.guests > table.capacity) {
+          throw new BadRequestException(`This table seats up to ${table.capacity} guests.`);
+        }
+      }
     }
 
     // Per-slot reservation cap (large-event protection).
@@ -49,16 +133,34 @@ export class ReservationsService {
       }
     }
 
+    // Per-interval guest cap — total seated guests starting in the same slot.
+    const maxGuestsPerInterval = capacityRules.maxGuestsPerInterval;
+    if (maxGuestsPerInterval) {
+      const agg = await this.prisma.reservation.aggregate({
+        _sum: { guests: true },
+        where: {
+          restaurantId: dto.restaurantId,
+          date: dto.date,
+          startTime: dto.startTime,
+          isArchived: false,
+          status: { notIn: ['CANCELLED'] },
+        },
+      });
+      if ((agg._sum.guests ?? 0) + dto.guests > maxGuestsPerInterval) {
+        throw new BadRequestException('This time slot has reached its guest capacity.');
+      }
+    }
+
     // Derive end time from reservationRules if not supplied.
     let endTime = dto.endTime;
     if (!endTime) {
       endTime = this.suggestEndTime(restaurant, dto.startTime, dto.guests);
     }
 
-    const policy: any = restaurant.reservationConfirmationPolicy ?? {
-      autoConfirm: true,
-    };
-    const status = policy.autoConfirm === false ? 'PENDING' : 'CONFIRMED';
+    // Confirmation mode (Reservation Settings → Online): 'auto' confirms
+    // instantly; 'manual'/'hybrid' enter the dashboard approval queue as PENDING.
+    const policy: any = restaurant.reservationConfirmationPolicy ?? {};
+    const status = policy.approvalMode === 'auto' ? 'CONFIRMED' : 'PENDING';
 
     const created = await this.prisma.reservation.create({
       data: {
@@ -84,6 +186,16 @@ export class ReservationsService {
         },
       },
     });
+    // Persist email/address (from the booking form's required fields) into the
+    // CRM meta keyed by phone, so they show on the staff customer profile.
+    if (dto.phone && (dto.email || dto.address)) {
+      const existing = await this.customerMeta.get(dto.restaurantId, dto.phone);
+      await this.customerMeta.set(dto.restaurantId, dto.phone, {
+        ...existing,
+        ...(dto.email ? { email: dto.email } : {}),
+        ...(dto.address ? { address: dto.address } : {}),
+      });
+    }
     return serializeReservationPublic(created);
   }
 
@@ -104,6 +216,40 @@ export class ReservationsService {
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
   }
 
+  /** Aggregate a customer's profile + full reservation history by phone, scoped
+   *  to the restaurant. Powers the portal customer-profile page. */
+  async customerProfile(restaurantId: string, phone: string) {
+    const rows = await this.prisma.reservation.findMany({
+      where: { restaurantId, phone, isArchived: false },
+      orderBy: [{ date: 'desc' }, { startTime: 'desc' }],
+    });
+    const latest = rows[0];
+    const meta = await this.customerMeta.get(restaurantId, phone);
+    return {
+      customer: {
+        name: latest?.name ?? '',
+        surname: latest?.surname ?? '',
+        phone,
+        occasion: latest?.occasion ?? null,
+        customerNotes: latest?.customerNotes ?? null,
+        staffNotes: latest?.staffNotes ?? null,
+        totalVisits: rows.filter((r) => r.status === 'COMPLETED').length,
+        email: meta.email ?? null,
+        birthday: meta.birthday ?? null,
+        company: meta.company ?? null,
+        address: meta.address ?? null,
+        tags: meta.tags ?? [],
+        notes: meta.notes ?? null,
+      },
+      reservations: rows.map(serializeReservationFull),
+    };
+  }
+
+  /** Save CRM-style customer details (email, birthday, tags, …). */
+  saveCustomerMeta(restaurantId: string, phone: string, meta: CustomerMeta) {
+    return this.customerMeta.set(restaurantId, phone, meta);
+  }
+
   // ---- Portal CRUD ----
   async listForRestaurant(restaurantId: string, date?: string) {
     const rows = await this.prisma.reservation.findMany({
@@ -113,6 +259,8 @@ export class ReservationsService {
         ...(date ? { date } : {}),
       },
       orderBy: [{ date: 'asc' }, { startTime: 'asc' }],
+      // Latest event so the modal can show "Edited by".
+      include: { events: { orderBy: { timestamp: 'desc' }, take: 1 } },
     });
     return rows.map(serializeReservationFull);
   }
@@ -197,6 +345,26 @@ export class ReservationsService {
       if (dto[f] !== undefined) data[f] = dto[f];
     }
 
+    // Human-readable change summary for the audit log ("Table 4 → 7", etc.).
+    const parts: string[] = [];
+    if (dto.guests !== undefined && dto.guests !== existing.guests)
+      parts.push(`guests ${existing.guests} → ${dto.guests}`);
+    if (dto.startTime !== undefined && dto.startTime !== existing.startTime)
+      parts.push(`time ${existing.startTime} → ${dto.startTime}`);
+    if (dto.date !== undefined && dto.date !== existing.date)
+      parts.push(`date ${existing.date} → ${dto.date}`);
+    if (dto.tableId !== undefined && dto.tableId !== existing.tableId) {
+      const [oldT, newT] = await Promise.all([
+        existing.tableId
+          ? this.prisma.table.findUnique({ where: { id: existing.tableId }, select: { number: true } })
+          : null,
+        dto.tableId
+          ? this.prisma.table.findUnique({ where: { id: dto.tableId }, select: { number: true } })
+          : null,
+      ]);
+      parts.push(`Table ${oldT?.number ?? '—'} → Table ${newT?.number ?? '—'}`);
+    }
+
     const updated = await this.prisma.reservation.update({
       where: { id },
       data,
@@ -226,6 +394,7 @@ export class ReservationsService {
       reservation: serializeReservationFull(updated),
       notifyCustomer: scheduleChanged,
       actions,
+      summary: parts.join(' · '),
     };
   }
 

@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ServeStaticModule } from '@nestjs/serve-static';
 import { join } from 'path';
 import { PrismaModule } from './prisma/prisma.module';
+import { AuditModule } from './audit/audit.module';
 import { RecurrenceModule } from './recurrence/recurrence.module';
 import { AuthModule } from './auth/auth.module';
 import { RestaurantsModule } from './restaurants/restaurants.module';
@@ -19,6 +20,7 @@ import { UploadModule } from './upload/upload.module';
       serveStaticOptions: { index: false },
     }),
     PrismaModule,
+    AuditModule,
     RecurrenceModule,
     AuthModule,
     RestaurantsModule,

@@ -5,13 +5,15 @@ import { FiFilter, FiChevronDown, FiChevronUp, FiX, FiMoreHorizontal } from 'rea
 import SearchBar from '../components/SearchBar';
 import RestaurantCard from '../components/RestaurantCard';
 import CategoryIcon from '../components/CategoryIcon';
+import Select from '../components/Select';
 import { categories } from '../data/restaurants';
+import { PRICE_BUCKETS, parsePriceRange, matchesBucket } from '../utils/price';
 import { useRestaurantsContext } from '../context/RestaurantsContext';
 
 const VISIBLE_CATEGORIES = 10;
 
 export default function RestaurantsPage() {
-  const { restaurants, loading, error } = useRestaurantsContext();
+  const { restaurants, availabilityToday, loading, error } = useRestaurantsContext();
   const [searchParams] = useSearchParams();
   const initialQuery = searchParams.get('q') || '';
 
@@ -24,7 +26,6 @@ export default function RestaurantsPage() {
     priceRange: [],
     openNow: false,
     minRating: 0,
-    maxDistance: null,
     reservationToday: false,
     outdoorSeating: false,
     familyFriendly: false,
@@ -74,27 +75,33 @@ export default function RestaurantsPage() {
     return currentTime >= openingTime && currentTime <= closingTime;
   };
 
-  const hasReservationToday = (restaurant) => {
-    const today = new Date().toISOString().split('T')[0];
-    const todayReservations = restaurant.reservations.filter((r) => r.date === today);
-    return todayReservations.length < restaurant.tables.length;
-  };
-
   const filteredRestaurants = restaurants
     .filter((restaurant) => {
+      // A restaurant can have several cuisines (multi-select in the portal),
+      // stored in `cuisines[]`. Fall back to the legacy single `cuisine`.
+      const cuisineList = restaurant.cuisines?.length
+        ? restaurant.cuisines
+        : restaurant.cuisine
+          ? [restaurant.cuisine]
+          : [];
       if (searchQuery) {
         const query = searchQuery.toLowerCase();
         const matchesName = restaurant.name.toLowerCase().includes(query);
-        const matchesCuisine = restaurant.cuisine.toLowerCase().includes(query);
+        const matchesCuisine = cuisineList.some((c) => c.toLowerCase().includes(query));
         const matchesAddress = restaurant.address.toLowerCase().includes(query);
         if (!matchesName && !matchesCuisine && !matchesAddress) return false;
       }
-      if (filters.cuisineType.length > 0 && !filters.cuisineType.includes(restaurant.cuisine)) return false;
-      if (filters.priceRange.length > 0 && !filters.priceRange.includes(restaurant.priceLevel)) return false;
+      if (filters.cuisineType.length > 0 && !filters.cuisineType.some((c) => cuisineList.includes(c))) return false;
+      if (filters.priceRange.length > 0) {
+        const selectedBuckets = PRICE_BUCKETS.filter((b) => filters.priceRange.includes(b.id));
+        if (!selectedBuckets.some((b) => matchesBucket(restaurant.priceRange, b))) return false;
+      }
       if (filters.openNow && !isOpenNow(restaurant)) return false;
       if (filters.minRating > 0 && restaurant.rating < filters.minRating) return false;
-      if (filters.maxDistance && restaurant.distance > filters.maxDistance) return false;
-      if (filters.reservationToday && !hasReservationToday(restaurant)) return false;
+      if (filters.reservationToday) {
+        const st = availabilityToday[restaurant.id]?.status;
+        if (st && st !== 'available' && st !== 'limited') return false;
+      }
       if (filters.outdoorSeating && !restaurant.outdoorSeating) return false;
       if (filters.familyFriendly && !restaurant.familyFriendly) return false;
       return true;
@@ -103,8 +110,8 @@ export default function RestaurantsPage() {
       switch (sortBy) {
         case 'popular': return (b.popular ? 1 : 0) - (a.popular ? 1 : 0) || b.rating - a.rating;
         case 'rating': return b.rating - a.rating;
-        case 'priceLow': return a.priceLevel - b.priceLevel;
-        case 'priceHigh': return b.priceLevel - a.priceLevel;
+        case 'priceLow': return (parsePriceRange(a.priceRange).min ?? Infinity) - (parsePriceRange(b.priceRange).min ?? Infinity);
+        case 'priceHigh': return (parsePriceRange(b.priceRange).max ?? -Infinity) - (parsePriceRange(a.priceRange).max ?? -Infinity);
         case 'distance': return a.distance - b.distance;
         default: return 0;
       }
@@ -119,12 +126,12 @@ export default function RestaurantsPage() {
     }));
   };
 
-  const togglePriceFilter = (level) => {
+  const togglePriceFilter = (bucketId) => {
     setFilters((prev) => ({
       ...prev,
-      priceRange: prev.priceRange.includes(level)
-        ? prev.priceRange.filter((p) => p !== level)
-        : [...prev.priceRange, level],
+      priceRange: prev.priceRange.includes(bucketId)
+        ? prev.priceRange.filter((p) => p !== bucketId)
+        : [...prev.priceRange, bucketId],
     }));
   };
 
@@ -134,7 +141,6 @@ export default function RestaurantsPage() {
       priceRange: [],
       openNow: false,
       minRating: 0,
-      maxDistance: null,
       reservationToday: false,
       outdoorSeating: false,
       familyFriendly: false,
@@ -147,7 +153,6 @@ export default function RestaurantsPage() {
     filters.priceRange.length +
     (filters.openNow ? 1 : 0) +
     (filters.minRating > 0 ? 1 : 0) +
-    (filters.maxDistance ? 1 : 0) +
     (filters.reservationToday ? 1 : 0) +
     (filters.outdoorSeating ? 1 : 0) +
     (filters.familyFriendly ? 1 : 0);
@@ -232,18 +237,19 @@ export default function RestaurantsPage() {
           <div className="flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-2">
               <label htmlFor="sort-select-restaurants" className="text-sm font-medium text-gray-600">Sort by:</label>
-              <select
-                id="sort-select-restaurants"
+              <Select
                 value={sortBy}
-                onChange={(e) => setSortBy(e.target.value)}
-                className="px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm font-medium text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent cursor-pointer"
-              >
-                <option value="popular">Most Popular</option>
-                <option value="rating">Highest Rated</option>
-                <option value="priceLow">Lowest Price</option>
-                <option value="priceHigh">Highest Price</option>
-                <option value="distance">Closest Distance</option>
-              </select>
+                onChange={(v) => setSortBy(v)}
+                ariaLabel="Sort by"
+                options={[
+                  { value: 'popular', label: 'Most Popular' },
+                  { value: 'rating', label: 'Highest Rated' },
+                  { value: 'priceLow', label: 'Lowest Price' },
+                  { value: 'priceHigh', label: 'Highest Price' },
+                  { value: 'distance', label: 'Closest Distance' },
+                ]}
+                className="w-48"
+              />
             </div>
 
             <button
@@ -290,9 +296,9 @@ export default function RestaurantsPage() {
                 className="overflow-hidden"
               >
                 <div className="mt-4 p-6 bg-white rounded-xl border border-gray-200 shadow-sm">
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                  <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-start lg:gap-12">
                     {/* Cuisine Type */}
-                    <div>
+                    <div className="w-full lg:max-w-md">
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">Cuisine Type</h3>
                       <div className="flex flex-wrap gap-2">
                         {categories.map((cat) => (
@@ -315,17 +321,17 @@ export default function RestaurantsPage() {
                     <div>
                       <h3 className="text-sm font-semibold text-gray-700 mb-3">Price Range</h3>
                       <div className="flex flex-wrap gap-2">
-                        {[{ level: 1, label: '$' }, { level: 2, label: '$$' }, { level: 3, label: '$$$' }, { level: 4, label: '$$$$' }].map(({ level, label }) => (
+                        {PRICE_BUCKETS.map((bucket) => (
                           <button
-                            key={level}
-                            onClick={() => togglePriceFilter(level)}
+                            key={bucket.id}
+                            onClick={() => togglePriceFilter(bucket.id)}
                             className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                              filters.priceRange.includes(level)
+                              filters.priceRange.includes(bucket.id)
                                 ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
                                 : 'bg-gray-100 text-gray-600 border border-transparent hover:bg-gray-200'
                             }`}
                           >
-                            {label}
+                            {bucket.label}
                           </button>
                         ))}
                       </div>
@@ -351,25 +357,6 @@ export default function RestaurantsPage() {
                       </div>
                     </div>
 
-                    {/* Distance */}
-                    <div>
-                      <h3 className="text-sm font-semibold text-gray-700 mb-3">Max Distance</h3>
-                      <div className="flex flex-wrap gap-2">
-                        {[1, 2, 3, 5, 10].map((km) => (
-                          <button
-                            key={km}
-                            onClick={() => setFilters((prev) => ({ ...prev, maxDistance: prev.maxDistance === km ? null : km }))}
-                            className={`px-3 py-2 rounded-lg text-sm font-medium transition-all ${
-                              filters.maxDistance === km
-                                ? 'bg-indigo-100 text-indigo-700 border border-indigo-300'
-                                : 'bg-gray-100 text-gray-600 border border-transparent hover:bg-gray-200'
-                            }`}
-                          >
-                            {km} km
-                          </button>
-                        ))}
-                      </div>
-                    </div>
                   </div>
 
                   {/* Toggle Filters */}
@@ -436,7 +423,7 @@ export default function RestaurantsPage() {
                   exit={{ opacity: 0, scale: 0.9 }}
                   transition={{ duration: 0.3 }}
                 >
-                  <RestaurantCard restaurant={restaurant} />
+                  <RestaurantCard restaurant={restaurant} availability={availabilityToday[restaurant.id]} />
                 </motion.div>
               ))}
             </AnimatePresence>

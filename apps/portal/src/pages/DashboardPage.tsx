@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   FiCalendar,
   FiUsers,
@@ -11,17 +11,41 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { DashboardSummary } from '../types';
 import { statusBadge } from '../components/statusBadge';
+import { OnlineReservationsQueue } from '../components/OnlineReservationsQueue';
+import { WeekOverview } from '../components/WeekOverview';
+
+type WeekDay = {
+  date: string;
+  weekday: string;
+  reservations: number;
+  guests: number;
+  closed: boolean;
+};
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
 
 export default function DashboardPage() {
   const { restaurant } = useAuth();
   const [data, setData] = useState<DashboardSummary | null>(null);
+  const [week, setWeek] = useState<WeekDay[]>([]);
   const [error, setError] = useState('');
 
-  useEffect(() => {
-    api.dashboard(todayStr()).then(setData).catch((e) => setError(e.message));
+  const load = useCallback(async () => {
+    try {
+      const [summary, weekData] = await Promise.all([
+        api.dashboard(todayStr()),
+        api.dashboardWeek(),
+      ]);
+      setData(summary);
+      setWeek(weekData.days);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load');
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   if (error) {
     return <div className="text-red-500">Failed to load dashboard: {error}</div>;
@@ -61,6 +85,21 @@ export default function DashboardPage() {
           {!restaurant?.published && ' · This restaurant is not published yet'}
         </p>
       </div>
+
+      {/* 7-day demand overview — click a day to open it in the scheduler */}
+      {week.length > 0 && (
+        <div>
+          <h3 className="text-sm font-semibold text-slate-600 mb-2">Upcoming demand</h3>
+          <WeekOverview days={week} />
+        </div>
+      )}
+
+      {/* Online reservation approval queue — the operational inbox */}
+      <OnlineReservationsQueue
+        pending={data.pendingOnline}
+        restaurant={restaurant}
+        onChanged={load}
+      />
 
       {/* Stat cards */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
