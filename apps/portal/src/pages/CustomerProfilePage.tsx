@@ -19,6 +19,7 @@ import { useAuth } from '../context/AuthContext';
 import type { Reservation } from '../types';
 import { statusBadge } from '../components/statusBadge';
 import { ChannelIcon } from '../components/channel';
+import { DatePicker } from '../components/DatePicker';
 import { resourceLabel } from '../lib/resources';
 
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -260,7 +261,13 @@ export default function CustomerProfilePage() {
               <div className="grid grid-cols-2 gap-3">
                 <label className="block">
                   <span className="text-xs font-medium text-slate-600 mb-1 block">Birthday</span>
-                  <input className="tb-input" type="date" value={metaForm.birthday} onChange={(e) => setMetaForm({ ...metaForm, birthday: e.target.value })} />
+                  <DatePicker
+                    className="w-full"
+                    ariaLabel="Birthday"
+                    placeholder="Pick a date"
+                    value={metaForm.birthday}
+                    onChange={(v) => setMetaForm({ ...metaForm, birthday: v })}
+                  />
                 </label>
                 <label className="block">
                   <span className="text-xs font-medium text-slate-600 mb-1 block">Company</span>

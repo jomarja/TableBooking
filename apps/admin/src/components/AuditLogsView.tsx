@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FiRefreshCw, FiSearch, FiUser, FiArrowRight } from 'react-icons/fi';
 import { api, type AdminRestaurant, type AuditEntry } from '../api/client';
 import { Select } from './Select';
+import { DatePicker } from './DatePicker';
 
 const ACTIONS = [
   'Impersonation Started',
@@ -90,11 +91,15 @@ export function AuditLogsView({ restaurants }: { restaurants: AdminRestaurant[] 
         <div className="flex flex-wrap items-end gap-3">
           <label className="flex flex-col text-xs font-medium text-slate-500">
             From
-            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="mt-1 px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700" />
+            <div className="mt-1">
+              <DatePicker value={from} onChange={setFrom} ariaLabel="From date" placeholder="From" />
+            </div>
           </label>
           <label className="flex flex-col text-xs font-medium text-slate-500">
             To
-            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="mt-1 px-2 py-1.5 rounded-lg border border-slate-200 text-sm text-slate-700" />
+            <div className="mt-1">
+              <DatePicker value={to} onChange={setTo} ariaLabel="To date" placeholder="To" />
+            </div>
           </label>
           <label className="flex flex-col text-xs font-medium text-slate-500">
             Restaurant

@@ -5,6 +5,7 @@ import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod, Reservation, Restaurant, TableModel } from '../types';
 import { ReservationModal } from '../components/ReservationModal';
+import { DatePicker } from '../components/DatePicker';
 import { ChannelIcon, channelMeta } from '../components/channel';
 import { resourceLabel } from '../lib/resources';
 
@@ -36,6 +37,42 @@ const WINDOW_DAYS = 2;
 function toMin(t: string) {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
+}
+
+// Lay overlapping intervals into side-by-side lanes (calendar style) so a longer
+// reservation never hides a shorter one on the same table. Returns, per id, its
+// lane index and the number of lanes in its overlapping cluster (non-overlapping
+// items get a cluster of 1 → full height).
+function assignLanes(
+  items: { id: string; start: number; end: number }[],
+): Map<string, { lane: number; lanes: number }> {
+  const result = new Map<string, { lane: number; lanes: number }>();
+  const sorted = [...items].sort((a, b) => a.start - b.start || a.end - b.end);
+  let cluster: { id: string; lane: number }[] = [];
+  let laneEnds: number[] = [];
+  let clusterEnd = -Infinity;
+  const flush = () => {
+    const lanes = laneEnds.length || 1;
+    for (const c of cluster) result.set(c.id, { lane: c.lane, lanes });
+    cluster = [];
+    laneEnds = [];
+  };
+  for (const it of sorted) {
+    // A new item that starts at/after every current-cluster interval's end has
+    // no overlap with the cluster → close it out and start fresh.
+    if (cluster.length && it.start >= clusterEnd) flush();
+    let lane = laneEnds.findIndex((e) => e <= it.start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(it.end);
+    } else {
+      laneEnds[lane] = it.end;
+    }
+    cluster.push({ id: it.id, lane });
+    clusterEnd = Math.max(clusterEnd, it.end);
+  }
+  flush();
+  return result;
 }
 function minToLabel(min: number) {
   const h = Math.floor(min / 60) % 24;
@@ -409,23 +446,26 @@ export default function ReservationsPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <button onClick={() => setDate(addDays(date, -1))} className="px-2 py-2 hover:bg-slate-50">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDate(addDays(date, -1))}
+              aria-label="Previous day"
+              className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
               <FiChevronLeft />
             </button>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="px-2 py-2 text-sm focus:outline-none"
-            />
-            <button onClick={() => setDate(addDays(date, 1))} className="px-2 py-2 hover:bg-slate-50">
+            <DatePicker value={date} onChange={(v) => setDate(v)} ariaLabel="Scheduler date" />
+            <button
+              onClick={() => setDate(addDays(date, 1))}
+              aria-label="Next day"
+              className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
               <FiChevronRight />
             </button>
             <button
               onClick={() => setDate(todayStr())}
               disabled={date === todayStr()}
-              className="px-3 py-2 text-sm font-medium border-l border-slate-200 text-indigo-600 hover:bg-slate-50 disabled:text-slate-300 disabled:cursor-not-allowed"
+              className="px-3 h-9 rounded-lg border border-slate-200 bg-white text-sm font-medium text-indigo-600 hover:bg-slate-50 disabled:text-slate-300 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               title="Jump to today"
             >
               Today
@@ -502,6 +542,8 @@ export default function ReservationsPage() {
           onCreateAt={(tableId, dayDate, startMin) => {
             setCreating({ tableId, date: dayDate, startTime: minToLabel(startMin) });
           }}
+          preventBlocks={!restaurant?.reservationRules?.allowReservationsOverBlocks}
+          onToast={(m) => showToast(m)}
         />
       )}
 
@@ -591,6 +633,8 @@ function TableScheduler({
   onComplete,
   onCancel,
   onCreateAt,
+  preventBlocks,
+  onToast,
 }: {
   tables: TableModel[];
   reservations: Reservation[];
@@ -609,6 +653,8 @@ function TableScheduler({
   onComplete: (r: Reservation) => void;
   onCancel: (r: Reservation) => void;
   onCreateAt: (tableId: string, date: string, startMin: number) => void;
+  preventBlocks: boolean;
+  onToast: (msg: string) => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pxPerHour, setPxPerHour] = useState(DEFAULT_PX_PER_HOUR);
@@ -872,6 +918,26 @@ function TableScheduler({
     [occupiedOn, rangeStart, rangeEnd, maxAbs],
   );
 
+  // Blocked-period intervals (abs minutes) on a table across the window. Used to
+  // keep reservations off blocks when the restaurant requires it.
+  const blockIntervalsOn = useCallback(
+    (tableId: string | null) => {
+      if (!tableId) return [] as { start: number; end: number }[];
+      const out: { start: number; end: number }[] = [];
+      for (const d of days) {
+        for (const b of blocksForTable(tableId, d.date)) {
+          const base = d.index * MIN_PER_DAY;
+          let s = base + toMin(b.startTime);
+          let e = base + toMin(b.endTime);
+          if (e <= s) e += MIN_PER_DAY;
+          out.push({ start: s, end: e });
+        }
+      }
+      return out;
+    },
+    [days, blocksForTable],
+  );
+
   // Ctrl+wheel to zoom — one notch ≈ 8 px/hr, normalised for trackpads.
   // Routes through applyZoom so the viewport centre stays put.
   const onWheel = useCallback((e: WheelEvent) => {
@@ -1109,6 +1175,12 @@ function TableScheduler({
     )
       return;
 
+    // When the restaurant disallows it, never let a reservation land on a block.
+    if (preventBlocks && overlapsAny(snapStart, snapEnd, blockIntervalsOn(newTableId))) {
+      onToast('You can’t place a reservation on a blocked period.');
+      return; // snap back (no history, no PATCH)
+    }
+
     // Moving a reservation sends it back to PENDING (it needs the customer to
     // be re-notified and re-confirmed) — unless it's already in a terminal /
     // in-progress state we shouldn't disturb: seated guests stay seated and
@@ -1152,6 +1224,11 @@ function TableScheduler({
       .then((result) => {
         onChanged(result.notifyCustomer, res.id);
       })
+      .catch((err) => {
+        // Server rejected it (e.g. a concurrent booking now overlaps, or it's
+        // over a block). Surface why; the finally below reverts to the saved spot.
+        onToast(err instanceof Error ? err.message : 'Could not save the change.');
+      })
       .finally(() => {
         setOverrides((o) => {
           const next = { ...o };
@@ -1159,7 +1236,7 @@ function TableScheduler({
           return next;
         });
       });
-  }, [reservations, onChanged, onHistory, absToParts, rangeStart, rangeEnd, maxAbs, resolvePlacement, occupiedOn]);
+  }, [reservations, onChanged, onHistory, absToParts, rangeStart, rangeEnd, maxAbs, resolvePlacement, occupiedOn, preventBlocks, blockIntervalsOn, onToast]);
 
   useEffect(() => {
     window.addEventListener('pointermove', onPointerMove);
@@ -1337,6 +1414,17 @@ function TableScheduler({
               </div>
               {zoneTables.map((t) => {
                 const rows = reservations.filter((r) => effectiveTableId(r) === t.id);
+                // Lay overlapping reservations into side-by-side lanes so none is
+                // hidden. The actively-dragged one floats full-height (excluded).
+                const laneMap = assignLanes(
+                  rows
+                    .filter((r) => preview?.id !== r.id)
+                    .map((r) => {
+                      const o = overrides[r.id];
+                      const a = o ? { start: o.start, end: o.end } : resAbs(r);
+                      return { id: r.id, start: a.start, end: a.end };
+                    }),
+                );
                 // While moving a reservation, light up the row under the cursor
                 // in green (valid drop) or red (would overlap — gets snapped clear
                 // on release). No glow on rows you're not hovering.
@@ -1354,7 +1442,7 @@ function TableScheduler({
                     }`}
                   >
                     <div
-                      className={`w-40 flex-shrink-0 sticky left-0 z-10 px-3 py-3 text-sm border-r transition-colors ${
+                      className={`w-40 flex-shrink-0 sticky left-0 z-40 px-3 py-3 text-sm border-r transition-colors ${
                         isDropTarget
                           ? dropOk
                             ? 'bg-emerald-50 border-emerald-200'
@@ -1390,6 +1478,10 @@ function TableScheduler({
                         const abs = snap(rangeStart + ((e.clientX - rect.left) / pxPerHour) * 60);
                         // Allow creating anywhere on the axis (open or closed hours).
                         const clamped = Math.max(rangeStart, Math.min(abs, Math.min(rangeEnd, maxAbs) - 30));
+                        if (preventBlocks && overlapsAny(clamped, clamped + 15, blockIntervalsOn(t.id))) {
+                          onToast('That time is blocked. Pick another time or table.');
+                          return;
+                        }
                         const { date: dDate, baseAbs } = absToParts(clamped);
                         onCreateAt(t.id, dDate, clamped - baseAbs);
                       }}
@@ -1451,7 +1543,7 @@ function TableScheduler({
                           return (
                             <div
                               key={`${d.date}-${b.id}`}
-                              className="absolute top-1.5 bottom-1.5 bg-orange-400/80 border border-orange-500 rounded text-[10px] text-white px-1.5 flex items-center overflow-hidden pointer-events-none"
+                              className="absolute top-1.5 bottom-1.5 z-0 bg-orange-400/80 border border-orange-500 rounded text-[10px] text-white px-1.5 flex items-center overflow-hidden pointer-events-none"
                               style={{ left: x, width: Math.max(w, 4) }}
                               title={`Blocked: ${b.reason}`}
                             >
@@ -1474,6 +1566,14 @@ function TableScheduler({
                         const isPast = now >= resEpochRange(r).end;
                         const visual = reservationVisual(r, now);
                         const wide = Math.max(w, 36);
+                        // Vertical lane so overlapping reservations don't hide
+                        // each other. The dragged one floats full-height.
+                        const laneInfo = laneMap.get(r.id);
+                        const lanes = laneInfo?.lanes ?? 1;
+                        const lane = laneInfo?.lane ?? 0;
+                        const laneH = (ROW_H - 8) / lanes;
+                        const laneTop = 4 + lane * laneH;
+                        const laneHeight = Math.max(14, laneH - (lanes > 1 ? 3 : 0));
                         // Bell (confirm) shows while a booking is PENDING — e.g.
                         // right after it's moved — and clears it to CONFIRMED.
                         const needsConfirm = r.status === 'PENDING';
@@ -1511,8 +1611,8 @@ function TableScheduler({
                                 : isDragging
                                   ? 'shadow-xl ring-2 ring-indigo-300 z-20'
                                   : isPast
-                                    ? 'shadow-sm opacity-80 hover:opacity-100 hover:shadow-lg'
-                                    : 'shadow-sm hover:shadow-lg'
+                                    ? 'shadow-sm opacity-80 hover:opacity-100 hover:shadow-lg z-10'
+                                    : 'shadow-sm hover:shadow-lg z-10'
                             } ${r.id === focusId ? 'ring-4 ring-amber-400 z-30' : ''}`}
                             style={{
                               // Position via transform (not `left`) so moving the
@@ -1523,8 +1623,10 @@ function TableScheduler({
                               transform: `translateX(${x}px)${isActive ? ' scale(1.02)' : ''}`,
                               willChange: isDragging ? 'transform' : undefined,
                               width: wide,
-                              top: 4,
-                              bottom: 4,
+                              // Lane geometry — the dragged block floats full-height.
+                              top: isActive ? 4 : laneTop,
+                              bottom: isActive ? 4 : undefined,
+                              height: isActive ? undefined : laneHeight,
                               touchAction: 'none',
                               // While this block is the one being dragged, let
                               // pointer events fall through to the row below so

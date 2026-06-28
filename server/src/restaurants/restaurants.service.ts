@@ -423,7 +423,7 @@ export class RestaurantsService {
       // The per-reservation guest cap (capacityRules + maxGuests scalar) — the
       // customer guest selector caps at the smallest of these.
       maxGuestsPerReservation: cap.maxGuestsPerReservation ?? r.maxGuests ?? null,
-      intervalMinutes: rules.intervalMinutes ?? 15,
+      intervalMinutes: rules.intervalMinutes ?? 30,
       onlineEnabled: rules.onlineEnabled !== false,
       minLeadTimeMinutes: rules.minLeadTimeMinutes ?? 0,
       maxBookingWindowDays: rules.maxBookingWindowDays ?? 0,

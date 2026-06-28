@@ -9,6 +9,7 @@ import {
   serializeReservationPublic,
 } from '../common/serializers';
 import { CustomerMetaService, type CustomerMeta } from './customer-meta.service';
+import { RecurrenceService } from '../recurrence/recurrence.service';
 
 function toMinutes(t: string): number {
   const [h, m] = t.split(':').map(Number);
@@ -20,10 +21,92 @@ export class ReservationsService {
   constructor(
     private prisma: PrismaService,
     private customerMeta: CustomerMetaService,
+    private recurrence: RecurrenceService,
   ) {}
+
+  /** Two HH:mm intervals overlap? Cross-midnight aware (end<=start => +1 day). */
+  private timesOverlap(s1: string, e1: string, s2: string, e2: string): boolean {
+    let a1 = toMinutes(s1);
+    let b1 = toMinutes(e1);
+    if (b1 <= a1) b1 += 1440;
+    let a2 = toMinutes(s2);
+    let b2 = toMinutes(e2);
+    if (b2 <= a2) b2 += 1440;
+    return a1 < b2 && b1 > a2;
+  }
+
+  /** Reject if another (non-cancelled) reservation already occupies this table at
+   *  an overlapping time — a table can't be double-booked. Unassigned (no table)
+   *  reservations can't clash. excludeId skips the row being updated. */
+  private async assertNoTableOverlap(
+    restaurantId: string,
+    tableId: string | null | undefined,
+    date: string,
+    startTime: string,
+    endTime: string,
+    excludeId?: string,
+  ) {
+    if (!tableId) return;
+    const others = await this.prisma.reservation.findMany({
+      where: {
+        restaurantId,
+        tableId,
+        date,
+        isArchived: false,
+        status: { notIn: ['CANCELLED'] },
+        ...(excludeId ? { id: { not: excludeId } } : {}),
+      },
+    });
+    for (const r of others) {
+      if (this.timesOverlap(startTime, endTime, r.startTime, r.endTime)) {
+        throw new BadRequestException(
+          `This table already has a reservation from ${r.startTime} to ${r.endTime}.`,
+        );
+      }
+    }
+  }
+
+  /** Reject placing a reservation during a blocked period for its table, unless
+   *  the restaurant opted in via reservationRules.allowReservationsOverBlocks. */
+  private async assertNotOverBlock(
+    restaurant: any,
+    tableId: string | null | undefined,
+    date: string,
+    startTime: string,
+    endTime: string,
+  ) {
+    if (!restaurant) return;
+    const rules: any = restaurant.reservationRules ?? {};
+    if (rules.allowReservationsOverBlocks === true) return;
+    if (!tableId) return;
+    const table = await this.prisma.table.findUnique({
+      where: { id: tableId },
+      select: { zoneId: true },
+    });
+    const blocks = await this.prisma.blockedPeriod.findMany({
+      where: { restaurantId: restaurant.id, isArchived: false },
+    });
+    for (const b of blocks) {
+      const occurs =
+        b.type === 'SINGLE'
+          ? b.date === date
+          : this.recurrence.occursOn(b.recurrenceRule as any, date);
+      if (!occurs) continue;
+      const appliesToTable =
+        (b.scope === 'TABLES' && (b.tableIds ?? []).includes(tableId)) ||
+        (b.scope === 'ZONE' && !!b.zoneId && table?.zoneId === b.zoneId);
+      if (!appliesToTable) continue;
+      if (this.timesOverlap(startTime, endTime, b.startTime, b.endTime)) {
+        throw new BadRequestException(
+          `This table is blocked from ${b.startTime} to ${b.endTime}${b.reason ? ` (${b.reason})` : ''}.`,
+        );
+      }
+    }
+  }
 
   /** Public booking from the customer app. */
   async createCustomer(dto: any) {
+    if (dto.tableId === '') dto.tableId = null; // "no resource" → unassigned, not a FK
     const restaurant = await this.prisma.restaurant.findFirst({
       where: { id: dto.restaurantId, isArchived: false },
     });
@@ -157,6 +240,10 @@ export class ReservationsService {
       endTime = this.suggestEndTime(restaurant, dto.startTime, dto.guests);
     }
 
+    // A table can't be double-booked, and (by default) not booked over a block.
+    await this.assertNoTableOverlap(dto.restaurantId, dto.tableId, dto.date, dto.startTime, endTime);
+    await this.assertNotOverBlock(restaurant, dto.tableId, dto.date, dto.startTime, endTime);
+
     // Confirmation mode (Reservation Settings → Online): 'auto' confirms
     // instantly; 'manual'/'hybrid' enter the dashboard approval queue as PENDING.
     const policy: any = restaurant.reservationConfirmationPolicy ?? {};
@@ -266,13 +353,17 @@ export class ReservationsService {
   }
 
   async createByStaff(restaurantId: string, dto: any, source: 'STAFF' | 'ADMIN') {
+    if (dto.tableId === '') dto.tableId = null; // "no resource" → unassigned, not a FK
+    const restaurant = await this.prisma.restaurant.findUnique({
+      where: { id: restaurantId },
+    });
     let endTime = dto.endTime;
     if (!endTime) {
-      const restaurant = await this.prisma.restaurant.findUnique({
-        where: { id: restaurantId },
-      });
       endTime = this.suggestEndTime(restaurant, dto.startTime, dto.guests ?? 2);
     }
+    // Enforce the same integrity rules as customer bookings.
+    await this.assertNoTableOverlap(restaurantId, dto.tableId, dto.date, dto.startTime, endTime);
+    await this.assertNotOverBlock(restaurant, dto.tableId, dto.date, dto.startTime, endTime);
     const created = await this.prisma.reservation.create({
       data: {
         restaurantId,
@@ -344,6 +435,8 @@ export class ReservationsService {
     ]) {
       if (dto[f] !== undefined) data[f] = dto[f];
     }
+    // "No resource" comes through as '' — store null, not an invalid FK.
+    if (data.tableId === '') data.tableId = null;
 
     // Human-readable change summary for the audit log ("Table 4 → 7", etc.).
     const parts: string[] = [];
@@ -363,6 +456,25 @@ export class ReservationsService {
           : null,
       ]);
       parts.push(`Table ${oldT?.number ?? '—'} → Table ${newT?.number ?? '—'}`);
+    }
+
+    // Re-validate integrity when any schedule field changes (move/resize/table/
+    // date). Pure status/notes edits skip this so cancelling/seating always work.
+    const scheduleFieldChanged =
+      dto.tableId !== undefined ||
+      dto.date !== undefined ||
+      dto.startTime !== undefined ||
+      dto.endTime !== undefined;
+    if (scheduleFieldChanged) {
+      const effTableId = dto.tableId !== undefined ? dto.tableId : existing.tableId;
+      const effDate = dto.date ?? existing.date;
+      const effStart = dto.startTime ?? existing.startTime;
+      const effEnd = dto.endTime ?? existing.endTime;
+      await this.assertNoTableOverlap(restaurantId, effTableId, effDate, effStart, effEnd, id);
+      const restaurant = await this.prisma.restaurant.findUnique({
+        where: { id: restaurantId },
+      });
+      await this.assertNotOverBlock(restaurant, effTableId, effDate, effStart, effEnd);
     }
 
     const updated = await this.prisma.reservation.update({

@@ -7,8 +7,6 @@ import {
   FiMapPin,
   FiCalendar,
   FiClock,
-  FiMinus,
-  FiPlus,
   FiChevronRight,
   FiChevronDown,
   FiRotateCcw,
@@ -20,8 +18,9 @@ import type { Reservation, ReservationChannel, ReservationStatus, TableModel } f
 import { statusBadge } from './statusBadge';
 import { RESERVATION_CHANNELS, channelMeta } from './channel';
 import { resourceLabel } from '../lib/resources';
-import { NumberField } from './NumberField';
 import { Select } from './Select';
+import { DatePicker } from './DatePicker';
+import { TimePickerDialog, GuestPickerDialog, TablePickerDialog } from './reservationPickers';
 
 interface Props {
   reservation: Reservation | null; // null = create
@@ -92,26 +91,6 @@ function fmtDuration(min: number) {
   if (h) return `${h}h`;
   return `${m}m`;
 }
-// Smart parse: "18"→18:00, "1830"→18:30, "9"→09:00, "930"→09:30, "18:45"→18:45.
-function normalizeTime(raw: string, fallback: string) {
-  const s = raw.trim();
-  if (!s) return fallback;
-  let hh: number, mm: number;
-  if (s.includes(':')) {
-    const [h, m] = s.split(':');
-    hh = parseInt(h, 10) || 0;
-    mm = parseInt(m, 10) || 0;
-  } else {
-    const d = s.replace(/\D/g, '');
-    if (!d) return fallback;
-    if (d.length <= 2) { hh = parseInt(d, 10); mm = 0; }
-    else if (d.length === 3) { hh = parseInt(d.slice(0, 1), 10); mm = parseInt(d.slice(1), 10); }
-    else { hh = parseInt(d.slice(0, 2), 10); mm = parseInt(d.slice(2, 4), 10); }
-  }
-  hh = Math.min(Math.max(hh, 0), 23);
-  mm = Math.min(Math.max(mm, 0), 59);
-  return `${pad(hh)}:${pad(mm)}`;
-}
 function shortDate(dStr: string) {
   return new Date(dStr).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
@@ -175,6 +154,10 @@ export function ReservationModal({
     () => !!(reservation?.customerNotes || reservation?.staffNotes),
   );
   const [flash, setFlash] = useState('');
+  // Which rich picker overlay is open (time / guests / table), if any.
+  const [picker, setPicker] = useState<'time' | 'guests' | 'table' | null>(null);
+  const pickerRef = useRef<'time' | 'guests' | 'table' | null>(null);
+  pickerRef.current = picker;
 
   const table = tables.find((t) => t.id === form.tableId);
   const resourceText = table ? resourceLabel(restaurant, table) : 'No resource';
@@ -279,6 +262,12 @@ export function ReservationModal({
       const a = actions.current;
       const target = e.target as HTMLElement;
       const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      // A rich picker overlay owns the keyboard while open: Esc closes it (not
+      // the whole modal), and modal shortcuts are suppressed.
+      if (pickerRef.current) {
+        if (e.key === 'Escape') { e.preventDefault(); setPicker(null); }
+        return;
+      }
       if (e.key === 'Escape') { a.close(); return; }
       const mod = e.ctrlKey || e.metaKey;
       if (mod && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); e.shiftKey ? a.redo() : a.undo(); return; }
@@ -384,41 +373,48 @@ export function ReservationModal({
               <input className="tb-input" value={form.phone} onChange={(e) => apply({ phone: e.target.value }, 'phone')} />
             </Field>
             <Field label="Guests">
-              <div className="flex items-center gap-2">
-                <button onClick={() => apply({ guests: Math.max(1, form.guests - 1) })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiMinus size={15} /></button>
-                <NumberField min={1} className="tb-input text-center" value={form.guests} onChange={(n) => apply({ guests: n })} />
-                <button onClick={() => apply({ guests: form.guests + 1 })} className="w-9 h-9 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center flex-shrink-0"><FiPlus size={15} /></button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setPicker('guests')}
+                className="tb-input w-full flex items-center justify-between text-left"
+              >
+                <span>{form.guests} {form.guests === 1 ? 'guest' : 'guests'}</span>
+                <FiUsers size={15} className="text-slate-400" />
+              </button>
             </Field>
           </div>
 
           {/* Resource */}
           <Field label="Resource / table">
-            <Select
-              className="w-full"
-              ariaLabel="Resource / table"
-              value={form.tableId}
-              onChange={(v) => apply({ tableId: v })}
-              options={[
-                { value: '', label: '— No resource —' },
-                ...tables.map((t) => ({
-                  value: String(t.id),
-                  label: `${resourceLabel(restaurant, t)} (${t.capacity} seats)`,
-                })),
-              ]}
-            />
+            <button
+              type="button"
+              onClick={() => setPicker('table')}
+              className="tb-input w-full flex items-center justify-between text-left"
+            >
+              <span className="truncate">{resourceText}</span>
+              <FiMapPin size={15} className="text-slate-400 shrink-0" />
+            </button>
           </Field>
 
           {/* Date + time */}
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-2 gap-3">
             <Field label="Date">
-              <input type="date" className="tb-input" value={form.date} onChange={(e) => apply({ date: e.target.value })} />
+              <DatePicker
+                value={form.date}
+                onChange={(v) => apply({ date: v })}
+                className="w-full"
+                ariaLabel="Reservation date"
+              />
             </Field>
-            <Field label="Start">
-              <TimeInput value={form.startTime} onCommit={(v) => apply({ startTime: v })} />
-            </Field>
-            <Field label="End">
-              <TimeInput value={form.endTime} onCommit={(v) => apply({ endTime: v })} />
+            <Field label="Time">
+              <button
+                type="button"
+                onClick={() => setPicker('time')}
+                className="tb-input w-full flex items-center justify-between text-left"
+              >
+                <span>{form.startTime} → {form.endTime}</span>
+                <FiClock size={15} className="text-slate-400" />
+              </button>
             </Field>
           </div>
 
@@ -505,33 +501,47 @@ export function ReservationModal({
           </div>
         </div>
       </div>
-    </div>
-  );
-}
 
-function TimeInput({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
-  const [raw, setRaw] = useState(value);
-  useEffect(() => setRaw(value), [value]);
-  const commit = () => {
-    const n = normalizeTime(raw, value);
-    setRaw(n);
-    if (n !== value) onCommit(n);
-  };
-  return (
-    <input
-      className="tb-input"
-      value={raw}
-      placeholder="18:30"
-      onChange={(e) => setRaw(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') {
-          e.preventDefault();
-          e.stopPropagation(); // commit the time without triggering Save
-          commit();
-        }
-      }}
-    />
+      {/* Rich pickers — open on tapping the Time / Guests / Table fields */}
+      {picker === 'time' && (
+        <TimePickerDialog
+          startTime={form.startTime}
+          endTime={form.endTime}
+          openingTime={restaurant?.openingTime || '10:00'}
+          closingTime={restaurant?.closingTime || '23:00'}
+          defaultDuration={defaultDuration}
+          onConfirm={(s, e) => {
+            apply({ startTime: s, endTime: e });
+            setPicker(null);
+          }}
+          onClose={() => setPicker(null)}
+        />
+      )}
+      {picker === 'guests' && (
+        <GuestPickerDialog
+          value={form.guests}
+          max={restaurant?.capacityRules?.maxGuestsPerReservation ?? restaurant?.maxGuests}
+          onConfirm={(n) => {
+            apply({ guests: n });
+            setPicker(null);
+          }}
+          onClose={() => setPicker(null)}
+        />
+      )}
+      {picker === 'table' && (
+        <TablePickerDialog
+          tables={tables}
+          restaurant={restaurant}
+          value={form.tableId}
+          guests={form.guests}
+          onConfirm={(id) => {
+            apply({ tableId: id });
+            setPicker(null);
+          }}
+          onClose={() => setPicker(null)}
+        />
+      )}
+    </div>
   );
 }
 

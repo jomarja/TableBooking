@@ -136,6 +136,9 @@ export interface ReservationRules {
   staffNotifyMode?: 'never' | 'always' | 'online' | 'large';
   largeGroupThreshold?: number;
   reservationNotice?: string;
+  // When false/absent (default), reservations cannot be placed on a table
+  // during a blocked period. Toggle on to let staff override.
+  allowReservationsOverBlocks?: boolean;
 }
 
 export interface ConfirmationPolicy {

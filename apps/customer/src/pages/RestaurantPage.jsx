@@ -268,7 +268,7 @@ export default function RestaurantPage() {
 
   // ----- Reservation settings reflected from the portal config -----
   const onlineEnabled = config?.onlineEnabled !== false;
-  const slotStep = config?.intervalMinutes || 15; // time-grid granularity (matches server default)
+  const slotStep = config?.intervalMinutes || 30; // time-grid granularity (matches server default)
   const leadMinutes = config?.minLeadTimeMinutes || 0;
   const maxWindowDays = config?.maxBookingWindowDays || 0;
   const maxBookingDate =
@@ -1121,46 +1121,54 @@ export default function RestaurantPage() {
                 <div className="flex items-center gap-2"><div className="w-4 h-4 rounded bg-gray-300" /><span className="text-sm text-gray-600">Too soon / Past</span></div>
               </div>
 
-              <div className="bg-white rounded-xl shadow-md p-4 md:p-6 overflow-x-auto">
-                <div className="min-w-[700px]">
-                  <div className="relative h-16 bg-gray-100 rounded-lg overflow-hidden flex">
-                    {timeSlots.map((slotStart, idx) => {
-                      const status = getSlotStatus(slotStart);
-                      const slotWidth = 100 / timeSlots.length;
-                      let bgColor;
-                      let isClickable = false;
-                      switch (status) {
-                        case 'available': bgColor = 'bg-blue-500 hover:bg-blue-600'; isClickable = true; break;
-                        case 'reserved': bgColor = 'bg-red-400'; break;
-                        case 'kitchen-closed': bgColor = 'bg-orange-400'; break;
-                        case 'closed': bgColor = 'bg-gray-700'; break;
-                        case 'past': bgColor = 'bg-gray-300'; break;
-                        default: bgColor = 'bg-gray-300';
-                      }
-                      return (
-                        <button
-                          key={idx}
-                          onClick={() => isClickable && handleTimeSelect(slotStart)}
-                          disabled={!isClickable}
-                          className={`h-full border-r border-white/20 flex items-center justify-center text-xs font-medium transition-colors ${bgColor} ${
-                            isClickable ? 'cursor-pointer text-white' : 'cursor-not-allowed text-white/70'
-                          }`}
-                          style={{ width: `${slotWidth}%` }}
-                          title={`${formatTime(slotStart)} - ${formatTime(slotStart + slotStep)}`}
-                        >
-                          <span className="hidden sm:inline">{formatTime(slotStart)}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="flex mt-2">
-                    {timeSlots.filter((_, idx) => idx % 2 === 0).map((slotStart, idx) => (
-                      <div key={idx} className="text-xs text-gray-500" style={{ width: `${(100 / timeSlots.length) * 2}%` }}>
-                        {formatTime(slotStart)}
+              <div className="bg-white rounded-xl shadow-md p-4 md:p-6 space-y-5">
+                {(() => {
+                  // Group slots by daypart so the times are scannable instead of
+                  // a cramped strip of overlapping labels.
+                  const sections = [];
+                  let cur = null;
+                  for (const s of timeSlots) {
+                    const h = Math.floor((((s % 1440) + 1440) % 1440) / 60);
+                    const label = h < 12 ? 'Morning' : h < 17 ? 'Midday' : h < 22 ? 'Evening' : 'Late night';
+                    if (!cur || cur.label !== label) {
+                      cur = { label, slots: [] };
+                      sections.push(cur);
+                    }
+                    cur.slots.push(s);
+                  }
+                  return sections.map((sec) => (
+                    <div key={`${sec.label}-${sec.slots[0]}`}>
+                      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">{sec.label}</p>
+                      <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+                        {sec.slots.map((slotStart) => {
+                          const status = getSlotStatus(slotStart);
+                          const clickable = status === 'available';
+                          const cls =
+                            status === 'available'
+                              ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-600 hover:text-white hover:border-blue-600'
+                              : status === 'reserved'
+                                ? 'border-rose-100 bg-rose-50 text-rose-300 line-through cursor-not-allowed'
+                                : status === 'kitchen-closed'
+                                  ? 'border-orange-100 bg-orange-50 text-orange-400 cursor-not-allowed'
+                                  : status === 'closed'
+                                    ? 'border-gray-200 bg-gray-100 text-gray-400 cursor-not-allowed'
+                                    : 'border-gray-100 bg-gray-50 text-gray-300 cursor-not-allowed';
+                          return (
+                            <button
+                              key={slotStart}
+                              disabled={!clickable}
+                              onClick={() => clickable && handleTimeSelect(slotStart)}
+                              title={`${formatTime(slotStart)} – ${formatTime(slotStart + suggestedDuration)}`}
+                              className={`min-h-[44px] rounded-lg border text-sm font-semibold transition-colors ${cls}`}
+                            >
+                              {formatTime(slotStart)}
+                            </button>
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
-                </div>
+                    </div>
+                  ));
+                })()}
               </div>
                 </>
               )}

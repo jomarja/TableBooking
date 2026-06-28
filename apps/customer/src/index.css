@@ -23,50 +23,169 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ──────────────────────────────────────────────────────────────
+   Date picker (react-calendar) — themed to match the site (emerald).
+   Self-contained: provides both layout and appearance, so the base
+   dist stylesheet isn't needed. Used by the booking date picker.
+   ────────────────────────────────────────────────────────────── */
 .react-calendar {
   width: 100% !important;
+  max-width: 21rem;
+  margin-inline: auto;
   border: none !important;
-  border-radius: 0.75rem;
-  padding: 1rem;
+  background: #fff;
   font-family: var(--font-sans);
+  line-height: 1.15;
 }
 
+/* Month / year navigation header */
+.react-calendar__navigation {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin-bottom: 0.5rem;
+}
+.react-calendar__navigation button {
+  background: none;
+  border: none;
+  border-radius: 0.625rem;
+  color: #111827;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.react-calendar__navigation__label {
+  flex-grow: 1;
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.5rem;
+}
+.react-calendar__navigation__arrow {
+  min-width: 2.5rem;
+  height: 2.5rem;
+  font-size: 1.4rem;
+  line-height: 1;
+  color: #6b7280;
+}
+.react-calendar__navigation button:enabled:hover,
+.react-calendar__navigation button:enabled:focus-visible {
+  background: #ecfdf5; /* emerald-50 */
+  color: #047857; /* emerald-700 */
+  outline: none;
+}
+.react-calendar__navigation button:disabled {
+  color: #d1d5db;
+  cursor: default;
+}
+/* Hide the year-jump double arrows for a cleaner header */
+.react-calendar__navigation__prev2-button,
+.react-calendar__navigation__next2-button {
+  display: none;
+}
+
+/* Weekday header row */
+.react-calendar__month-view__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+  margin-bottom: 0.25rem;
+}
+.react-calendar__month-view__weekdays__weekday {
+  text-align: center;
+  padding: 0.4rem 0;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+.react-calendar__month-view__weekdays__weekday abbr {
+  text-decoration: none;
+  cursor: default;
+}
+
+/* Days grid */
+.react-calendar__month-view__days {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 3px;
+}
+
+/* Day / month / year tiles */
 .react-calendar__tile {
-  border-radius: 0.5rem;
-  padding: 0.75rem;
-  font-size: 0.875rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  min-height: 2.5rem;
+  max-width: 100%;
+  padding: 0.15rem 0;
+  background: none;
+  border: none;
+  border-radius: 0.625rem;
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: #1f2937;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+}
+.react-calendar__tile abbr {
+  text-decoration: none;
+}
+.react-calendar__tile:enabled:hover {
+  background: #ecfdf5;
+  color: #047857;
+}
+.react-calendar__tile:enabled:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 2px #10b981;
 }
 
-.react-calendar__tile--active {
-  background: #2563EB !important;
-  color: white !important;
-  border-radius: 0.5rem;
+/* Today */
+.react-calendar__tile--now:enabled {
+  background: #f0fdf4;
+  color: #047857;
+  font-weight: 700;
+}
+.react-calendar__tile--now:enabled:hover {
+  background: #dcfce7;
 }
 
+/* Selected day */
+.react-calendar__tile--active:enabled,
+.react-calendar__tile--active:enabled:hover,
+.react-calendar__tile--active:enabled:focus {
+  background: #10b981 !important; /* emerald-500 */
+  color: #fff !important;
+  font-weight: 700;
+  box-shadow: 0 6px 14px -4px rgba(16, 185, 129, 0.55);
+}
+
+/* Disabled (past, closed, beyond the booking window) */
 .react-calendar__tile:disabled {
-  background: #F3F4F6 !important;
-  color: #9CA3AF !important;
+  background: none !important;
+  color: #cbd5e1 !important;
   cursor: not-allowed;
 }
 
-.react-calendar__tile:hover:not(:disabled) {
-  background: #DBEAFE !important;
-  border-radius: 0.5rem;
+/* Neighbouring-month days — faded so the current month stands out */
+.react-calendar__month-view__days__day--neighboringMonth:enabled {
+  color: #cbd5e1;
 }
 
-.react-calendar__navigation button {
-  font-size: 1rem;
-  font-weight: 600;
-  border-radius: 0.5rem;
+/* Drill-in views (months in a year, years in a decade) */
+.react-calendar__year-view__months,
+.react-calendar__decade-view__years,
+.react-calendar__century-view__decades {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
 }
-
-.react-calendar__navigation button:hover {
-  background: #F3F4F6 !important;
-}
-
-.react-calendar__month-view__weekdays {
-  font-size: 0.75rem;
-  font-weight: 600;
-  color: #6B7280;
-  text-transform: uppercase;
+.react-calendar__year-view__months .react-calendar__tile,
+.react-calendar__decade-view__years .react-calendar__tile,
+.react-calendar__century-view__decades .react-calendar__tile {
+  aspect-ratio: auto;
+  padding: 0.85rem 0.25rem;
+  font-size: 0.8rem;
 }

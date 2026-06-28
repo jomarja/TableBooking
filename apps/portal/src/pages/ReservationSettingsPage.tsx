@@ -16,6 +16,7 @@ interface Settings {
   onlineEnabled: boolean;
   approvalMode: 'auto' | 'manual' | 'hybrid';
   waitingList: boolean;
+  allowReservationsOverBlocks: boolean;
   minGroupSize: number;
   maxGroupSize: number;
   minLeadTimeMinutes: number;
@@ -100,11 +101,12 @@ export default function ReservationSettingsPage() {
     const policy = restaurant.reservationConfirmationPolicy || ({} as NonNullable<typeof restaurant.reservationConfirmationPolicy>);
     setS({
       defaultDurationMinutes: rules.defaultDurationMinutes ?? 90,
-      intervalMinutes: rules.intervalMinutes ?? 15,
+      intervalMinutes: rules.intervalMinutes ?? 30,
       durationByGuests: rules.durationByGuests ?? [],
       onlineEnabled: rules.onlineEnabled !== false,
       approvalMode: policy.approvalMode ?? (policy.autoConfirm ? 'auto' : 'manual'),
       waitingList: !!rules.waitingList,
+      allowReservationsOverBlocks: !!rules.allowReservationsOverBlocks,
       minGroupSize: rules.minGroupSize ?? 1,
       maxGroupSize: rules.maxGroupSize ?? restaurant.maxGuests ?? 20,
       minLeadTimeMinutes: rules.minLeadTimeMinutes ?? 0,
@@ -151,6 +153,7 @@ export default function ReservationSettingsPage() {
           intervalMinutes: s.intervalMinutes,
           onlineEnabled: s.onlineEnabled,
           waitingList: s.waitingList,
+          allowReservationsOverBlocks: s.allowReservationsOverBlocks,
           minGroupSize: s.minGroupSize,
           maxGroupSize: s.maxGroupSize,
           minLeadTimeMinutes: s.minLeadTimeMinutes,
@@ -315,6 +318,12 @@ export default function ReservationSettingsPage() {
           </div>
           <Row label="Waiting list" hint="Let guests join a waiting list when fully booked (notifications coming soon).">
             <Toggle checked={s.waitingList} onChange={(v) => set('waitingList', v)} />
+          </Row>
+          <Row
+            label="Allow reservations over blocked periods"
+            hint="Off (recommended): staff can't place or move a reservation onto a table during a blocked period, and overlapping new reservations are rejected. On: staff may override and book during a block. Customers can never book over a block regardless."
+          >
+            <Toggle checked={s.allowReservationsOverBlocks} onChange={(v) => set('allowReservationsOverBlocks', v)} />
           </Row>
           <Row label="Minimum group size">
             <NumberField className={selectCls + ' w-24'} min={1} value={s.minGroupSize} onChange={(n) => set('minGroupSize', n)} />

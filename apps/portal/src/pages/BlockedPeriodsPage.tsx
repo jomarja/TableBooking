@@ -16,6 +16,8 @@ import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod } from '../types';
 import { NumberField } from '../components/NumberField';
 import { Select } from '../components/Select';
+import { DatePicker } from '../components/DatePicker';
+import ConfirmDialog from '../components/ConfirmDialog';
 
 const REASONS = ['Private Event', 'Wedding', 'Cleaning', 'Maintenance', 'Staff Meeting'];
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -224,23 +226,26 @@ export default function BlockedPeriodsPage() {
         </div>
 
         {filter === 'today' && (
-          <div className="flex items-center bg-white border border-slate-200 rounded-lg overflow-hidden">
-            <button onClick={() => setDate(addDays(date, -1))} className="px-2 py-2 hover:bg-slate-50" title="Previous day">
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setDate(addDays(date, -1))}
+              aria-label="Previous day"
+              className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
               <FiChevronLeft />
             </button>
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="px-2 py-2 text-sm focus:outline-none"
-            />
-            <button onClick={() => setDate(addDays(date, 1))} className="px-2 py-2 hover:bg-slate-50" title="Next day">
+            <DatePicker value={date} onChange={(v) => setDate(v)} ariaLabel="Date" />
+            <button
+              onClick={() => setDate(addDays(date, 1))}
+              aria-label="Next day"
+              className="w-9 h-9 flex items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-500 hover:bg-slate-50 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
               <FiChevronRight />
             </button>
             <button
               onClick={() => setDate(todayStr())}
               disabled={date === todayStr()}
-              className="px-3 py-2 text-sm font-medium border-l border-slate-200 text-indigo-600 hover:bg-slate-50 disabled:text-slate-300 disabled:cursor-not-allowed"
+              className="px-3 h-9 rounded-lg border border-slate-200 bg-white text-sm font-medium text-indigo-600 hover:bg-slate-50 disabled:text-slate-300 disabled:cursor-not-allowed focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
               title="Jump to today"
             >
               Today
@@ -406,33 +411,74 @@ function BlockForm({
   const [endTime, setEndTime] = useState(initial?.endTime || '22:00');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  // Holds the pending block payload + conflicting-reservation count while we
+  // ask the staff to confirm adding a block over existing reservations.
+  const [pendingConfirm, setPendingConfirm] = useState<{ count: number; payload: any } | null>(null);
 
   const toggleTable = (id: string) =>
     setTableIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
-  const save = async () => {
-    setError('');
-    if (scope === 'TABLES' && tableIds.length === 0) {
-      setError('Select at least one resource, or block a whole zone.');
-      return;
-    }
-    setSaving(true);
-    const payload = {
-      scope,
-      tableIds: scope === 'TABLES' ? tableIds : [],
-      zoneId: scope === 'ZONE' ? zoneId : null,
+  const buildPayload = () => ({
+    scope,
+    tableIds: scope === 'TABLES' ? tableIds : [],
+    zoneId: scope === 'ZONE' ? zoneId : null,
+    type,
+    date: type === 'SINGLE' ? date : null,
+    recurrenceRule:
+      type === 'RECURRING'
+        ? freq === 'WEEKLY'
+          ? { freq, byWeekday }
+          : { freq, byMonthDay }
+        : null,
+    startTime,
+    endTime,
+    reason,
+  });
+
+  // Tables this block actually covers (ZONE → every table in the zone).
+  const effectiveTableIds = () =>
+    scope === 'ZONE'
+      ? tables.filter((t) => t.zoneId === zoneId).map((t) => t.id)
+      : tableIds;
+
+  // The concrete date to check for conflicts: the chosen day for SINGLE, or the
+  // next upcoming occurrence (within 60 days) for a RECURRING rule.
+  const conflictCheckDate = (): string | null => {
+    if (type === 'SINGLE') return date;
+    const probe = {
       type,
-      date: type === 'SINGLE' ? date : null,
-      recurrenceRule:
-        type === 'RECURRING'
-          ? freq === 'WEEKLY'
-            ? { freq, byWeekday }
-            : { freq, byMonthDay }
-          : null,
-      startTime,
-      endTime,
-      reason,
-    };
+      date: null,
+      recurrenceRule: freq === 'WEEKLY' ? { freq, byWeekday } : { freq, byMonthDay },
+    } as unknown as BlockedPeriod;
+    for (let i = 0; i < 60; i++) {
+      const dStr = addDays(todayStr(), i);
+      if (occursOn(probe, dStr)) return dStr;
+    }
+    return null;
+  };
+
+  // Count non-cancelled reservations that overlap this block (same table + time).
+  const countConflicts = async (): Promise<number> => {
+    const ids = effectiveTableIds();
+    if (ids.length === 0) return 0;
+    const dStr = conflictCheckDate();
+    if (!dStr) return 0;
+    const reservations = await api.listReservations(dStr);
+    const blkS = toMin(startTime);
+    let blkE = toMin(endTime);
+    if (blkE <= blkS) blkE += 1440;
+    return reservations.filter((r) => {
+      if (!r.tableId || !ids.includes(r.tableId)) return false;
+      if (r.status === 'CANCELLED' || r.status === 'COMPLETED') return false;
+      let rs = toMin(r.startTime);
+      let re = toMin(r.endTime);
+      if (re <= rs) re += 1440;
+      return blkS < re && rs < blkE;
+    }).length;
+  };
+
+  const doSave = async (payload: any) => {
+    setSaving(true);
     try {
       if (isEdit) await api.updateBlocked(initial!.id, payload);
       else await api.createBlocked(payload);
@@ -443,7 +489,32 @@ function BlockForm({
     }
   };
 
+  const save = async () => {
+    setError('');
+    if (scope === 'TABLES' && tableIds.length === 0) {
+      setError('Select at least one resource, or block a whole zone.');
+      return;
+    }
+    const payload = buildPayload();
+    // Guard against a double-submit while the async conflict probe is in flight.
+    setSaving(true);
+    // Warn if existing reservations fall inside this block — they're kept, not
+    // removed, and will sit on top of the block in the scheduler.
+    try {
+      const count = await countConflicts();
+      if (count > 0) {
+        setSaving(false);
+        setPendingConfirm({ count, payload });
+        return;
+      }
+    } catch {
+      /* If the conflict probe fails, don't block saving. */
+    }
+    await doSave(payload);
+  };
+
   return (
+    <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}
@@ -526,7 +597,7 @@ function BlockForm({
               ))}
             </div>
             {type === 'SINGLE' ? (
-              <input type="date" className="tb-input" value={date} onChange={(e) => setDate(e.target.value)} />
+              <DatePicker value={date} onChange={(v) => setDate(v)} className="w-full" ariaLabel="Block date" />
             ) : (
               <div className="flex gap-2">
                 <Select
@@ -584,5 +655,19 @@ function BlockForm({
         </div>
       </div>
     </div>
+    <ConfirmDialog
+      open={!!pendingConfirm}
+      title="Reservations during this block"
+      message={`There ${pendingConfirm?.count === 1 ? 'is' : 'are'} ${pendingConfirm?.count ?? 0} reservation${pendingConfirm?.count === 1 ? '' : 's'} during this blocked period. They'll be kept and shown on top of the block. Add the block anyway?`}
+      confirmLabel="Add block anyway"
+      tone="danger"
+      onConfirm={() => {
+        const p = pendingConfirm?.payload;
+        setPendingConfirm(null);
+        if (p) void doSave(p);
+      }}
+      onCancel={() => setPendingConfirm(null)}
+    />
+    </>
   );
 }
