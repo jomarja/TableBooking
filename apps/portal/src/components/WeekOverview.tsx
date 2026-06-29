@@ -1,5 +1,3 @@
-import { useNavigate } from 'react-router-dom';
-
 interface Day {
   date: string;
   weekday: string;
@@ -18,37 +16,68 @@ const SHORT: Record<string, string> = {
   Saturday: 'Sat',
 };
 
-/** 7-day demand strip — click a day to jump to it in the scheduler. */
-export function WeekOverview({ days }: { days: Day[] }) {
-  const navigate = useNavigate();
+const dayMonth = (ds: string) =>
+  new Date(ds + 'T00:00:00Z').toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
+
+/**
+ * Week demand strip — click a day to load it into the overview below.
+ * The selected day is ringed; today is badged.
+ */
+export function WeekOverview({
+  days,
+  selectedDate,
+  today,
+  onSelect,
+}: {
+  days: Day[];
+  selectedDate: string;
+  today: string;
+  onSelect: (date: string) => void;
+}) {
   return (
-    <div className="grid grid-cols-3 sm:grid-cols-4 lg:grid-cols-7 gap-3">
-      {days.map((d, i) => {
-        const label = i === 0 ? 'Today' : i === 1 ? 'Tomorrow' : SHORT[d.weekday] || d.weekday;
+    <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 sm:gap-3">
+      {days.map((d) => {
+        const isToday = d.date === today;
+        const isSel = d.date === selectedDate;
         const busy = !d.closed && d.guests > 0;
         return (
           <button
             key={d.date}
-            onClick={() => navigate(`/reservations?date=${d.date}`)}
-            title={`Open ${d.date} in the scheduler`}
-            className={`text-left bg-white rounded-xl border p-4 transition-colors hover:border-indigo-300 hover:shadow-sm ${
-              i === 0 ? 'border-indigo-400 ring-1 ring-indigo-200' : 'border-slate-200'
+            onClick={() => onSelect(d.date)}
+            aria-pressed={isSel}
+            title={`View ${dayMonth(d.date)}`}
+            className={`text-left rounded-xl border p-3 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              isSel
+                ? 'border-indigo-500 ring-2 ring-indigo-200 bg-indigo-50/50'
+                : 'bg-white border-slate-200 hover:border-indigo-300 hover:shadow-sm'
             }`}
           >
-            <p className="text-xs font-semibold text-slate-500 truncate">{label}</p>
+            <div className="flex items-center justify-between gap-1">
+              <span className={`text-xs font-semibold ${isSel ? 'text-indigo-700' : 'text-slate-500'}`}>
+                {SHORT[d.weekday] || d.weekday}
+              </span>
+              {isToday && (
+                <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-100 px-1.5 py-0.5 rounded-full">
+                  Today
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-400">{dayMonth(d.date)}</p>
             {d.closed ? (
               <p className="mt-2 text-sm font-semibold text-slate-400">Closed</p>
             ) : (
-              <p className="mt-1 leading-none">
-                <span className={`text-2xl font-bold ${busy ? 'text-slate-800' : 'text-slate-300'}`}>
+              <p className="mt-2 leading-none">
+                <span className={`text-xl font-bold ${busy ? 'text-slate-800' : 'text-slate-300'}`}>
                   {d.guests}
                 </span>
-                <span className="text-sm text-slate-400"> / {d.reservations}</span>
+                <span className="text-xs text-slate-400"> / {d.reservations}</span>
               </p>
             )}
-            <p className="text-[11px] text-slate-400 mt-1">
-              {d.closed ? d.date.slice(5) : 'guests / bookings'}
-            </p>
+            {!d.closed && <p className="text-[10px] text-slate-400 mt-0.5">guests / bookings</p>}
           </button>
         );
       })}
