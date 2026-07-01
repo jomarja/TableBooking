@@ -61,8 +61,10 @@ export function Select({
     const r = el.getBoundingClientRect();
     const spaceBelow = window.innerHeight - r.bottom;
     const openUp = spaceBelow < 240 && r.top > spaceBelow;
+    // The menu grows to fit its widest option (up to maxW) — keep it on-screen.
+    const maxW = Math.min(window.innerWidth * 0.9, 384);
     setRect({
-      left: r.left,
+      left: Math.max(8, Math.min(r.left, window.innerWidth - 8 - maxW)),
       width: r.width,
       top: openUp ? undefined : r.bottom + 4,
       bottom: openUp ? window.innerHeight - r.top + 4 : undefined,
@@ -204,11 +206,12 @@ export function Select({
             ref={listRef}
             role="listbox"
             aria-labelledby={labelId}
-            className="fixed z-[100] max-h-60 overflow-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl focus:outline-none"
+            className="fixed z-[100] max-h-60 overflow-y-auto rounded-lg border border-slate-200 bg-white py-1 shadow-xl focus:outline-none"
             style={{
               left: rect.left,
-              width: rect.width,
               minWidth: rect.width,
+              width: 'max-content',
+              maxWidth: 'min(90vw, 24rem)',
               top: rect.top,
               bottom: rect.bottom,
             }}
@@ -231,7 +234,7 @@ export function Select({
                       : `cursor-pointer ${isActive ? 'bg-indigo-50 text-indigo-700' : 'text-slate-700'}`
                   }`}
                 >
-                  <span className="truncate">{opt.label}</span>
+                  <span className="whitespace-normal">{opt.label}</span>
                   {isSel && <FiCheck size={15} className="shrink-0 text-indigo-600" />}
                 </li>
               );

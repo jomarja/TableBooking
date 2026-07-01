@@ -49,7 +49,7 @@ The team followed a feature-branch workflow on Git. The backend schema was defin
 
 Giorgi led the **backend architecture and server-side development**. He designed the Prisma database schema, authored the core NestJS modules (restaurants, reservations, availability, admin, auth), and set up the monorepo workspace structure. He implemented the availability calculation engine — the most logic-intensive component — which resolves open slots by intersecting opening hours, blocked periods, and existing reservations. He also handled JWT authentication, role-based guards, database migrations, and the seed data pipeline.
 
-### Nikoloz Jvebelia
+### Nikoloz Jvebenava
 
 Nikoloz owned the **restaurant staff portal** (`apps/portal`). He built the reservation management dashboard, the status-update flows, and the floor-plan builder that allows staff to drag-and-drop tables and zones onto a canvas. He implemented the blocked-period scheduling UI with support for single events and recurring patterns, and developed the first-login setup wizard that walks new restaurant staff through configuring their profile and floor plan. He also contributed to the shared floor-plan renderer used across both the portal and customer app.
 

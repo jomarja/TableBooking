@@ -21,6 +21,7 @@ import { resourceLabel } from '../lib/resources';
 import { Select } from './Select';
 import { DatePicker } from './DatePicker';
 import { TimePickerDialog, GuestPickerDialog, TablePickerDialog } from './reservationPickers';
+import ConfirmDialog from './ConfirmDialog';
 
 interface Props {
   reservation: Reservation | null; // null = create
@@ -158,6 +159,9 @@ export function ReservationModal({
   const [picker, setPicker] = useState<'time' | 'guests' | 'table' | null>(null);
   const pickerRef = useRef<'time' | 'guests' | 'table' | null>(null);
   pickerRef.current = picker;
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const confirmCancelRef = useRef(false);
+  confirmCancelRef.current = confirmCancel;
 
   const table = tables.find((t) => t.id === form.tableId);
   const resourceText = table ? resourceLabel(restaurant, table) : 'No resource';
@@ -221,7 +225,6 @@ export function ReservationModal({
 
   const cancelReservation = async () => {
     if (!reservation) return;
-    if (!confirm('Cancel this reservation? It stays visible (struck-through) for your records.')) return;
     setSaving(true);
     setError('');
     try {
@@ -262,6 +265,8 @@ export function ReservationModal({
       const a = actions.current;
       const target = e.target as HTMLElement;
       const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+      // The cancel-confirm dialog owns the keyboard (Esc/Enter) while open.
+      if (confirmCancelRef.current) return;
       // A rich picker overlay owns the keyboard while open: Esc closes it (not
       // the whole modal), and modal shortcuts are suppressed.
       if (pickerRef.current) {
@@ -484,7 +489,7 @@ export function ReservationModal({
         {/* Sticky footer — always visible */}
         <div className="flex items-center justify-between gap-2 px-5 py-3 border-t border-slate-100 flex-shrink-0">
           {isEdit && form.status !== 'CANCELLED' ? (
-            <button onClick={cancelReservation} className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 font-medium">
+            <button onClick={() => setConfirmCancel(true)} className="flex items-center gap-1.5 text-sm text-red-600 hover:text-red-700 font-medium">
               <FiTrash2 size={15} /> Cancel reservation
             </button>
           ) : (
@@ -541,6 +546,20 @@ export function ReservationModal({
           onClose={() => setPicker(null)}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmCancel}
+        title="Cancel reservation?"
+        message="It stays visible (struck-through) in the scheduler for your records."
+        confirmLabel="Cancel reservation"
+        cancelLabel="Keep it"
+        tone="danger"
+        onConfirm={() => {
+          setConfirmCancel(false);
+          void cancelReservation();
+        }}
+        onCancel={() => setConfirmCancel(false)}
+      />
     </div>
   );
 }
