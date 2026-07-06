@@ -107,8 +107,15 @@ export class ReservationsService {
   /** Public booking from the customer app. */
   async createCustomer(dto: any) {
     if (dto.tableId === '') dto.tableId = null; // "no resource" → unassigned, not a FK
+    // Only publicly-bookable restaurants accept customer bookings — a PENDING,
+    // DISABLED or unpublished restaurant must not be reachable via the API.
     const restaurant = await this.prisma.restaurant.findFirst({
-      where: { id: dto.restaurantId, isArchived: false },
+      where: {
+        id: dto.restaurantId,
+        isArchived: false,
+        status: 'APPROVED',
+        published: true,
+      },
     });
     if (!restaurant) throw new NotFoundException('Restaurant not found');
 

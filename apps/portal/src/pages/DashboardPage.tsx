@@ -9,11 +9,10 @@ import {
   FiCheckSquare,
   FiChevronLeft,
   FiChevronRight,
-  FiExternalLink,
 } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
-import type { DashboardSummary } from '../types';
+import type { DashboardSummary, ReservationStatus } from '../types';
 import { statusBadge } from '../components/statusBadge';
 import { OnlineReservationsQueue } from '../components/OnlineReservationsQueue';
 import { WeekOverview } from '../components/WeekOverview';
@@ -55,6 +54,8 @@ export default function DashboardPage() {
   const [error, setError] = useState('');
   const [weekStart, setWeekStart] = useState(() => mondayOf(todayStr()));
   const [selectedDate, setSelectedDate] = useState(() => todayStr());
+  // What to show in the day's reservation list — All or a single status.
+  const [statusFilter, setStatusFilter] = useState<ReservationStatus | 'ALL'>('ALL');
 
   const load = useCallback(async () => {
     try {
@@ -64,6 +65,12 @@ export default function DashboardPage() {
       ]);
       setData(summary);
       setWeek(weekData.days);
+      // If a reload removed the last reservation of the actively-filtered
+      // status (e.g. it was just approved), fall back to All so the chip row
+      // never strands in a "nothing selected" state.
+      setStatusFilter((f) =>
+        f !== 'ALL' && !summary.todayReservations.some((r) => r.status === f) ? 'ALL' : f,
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load');
     }
@@ -74,14 +81,21 @@ export default function DashboardPage() {
   }, [load]);
 
   const isToday = selectedDate === todayStr();
+  // Changing the day always resets the status filter, so the list is never
+  // silently empty because of a leftover filter.
+  const selectDay = (d: string) => {
+    setSelectedDate(d);
+    setStatusFilter('ALL');
+  };
   // Step the whole view (visible week + selected day) forward/back a week.
   const stepWeek = (delta: number) => {
     setWeekStart((w) => addDays(w, delta * 7));
     setSelectedDate((d) => addDays(d, delta * 7));
+    setStatusFilter('ALL');
   };
   const resetToThisWeek = () => {
     setWeekStart(mondayOf(todayStr()));
-    setSelectedDate(todayStr());
+    selectDay(todayStr());
   };
 
   if (error) {
@@ -92,14 +106,35 @@ export default function DashboardPage() {
   }
 
   const s = data.stats;
+  const schedulerUrl = `/reservations?date=${selectedDate}`;
+  // Every card is a shortcut — it opens the page where that number lives.
   const cards = [
-    { label: isToday ? "Today's Reservations" : 'Reservations', value: s.todayReservations, icon: FiCalendar, color: 'indigo' },
-    { label: 'Expected Guests', value: s.expectedGuests, icon: FiUsers, color: 'emerald' },
-    { label: 'Occupancy', value: `${s.occupancy}%`, icon: FiTrendingUp, color: 'blue' },
-    { label: 'Upcoming Arrivals', value: s.upcomingArrivals, icon: FiClock, color: 'amber' },
-    { label: 'Blocked Periods', value: s.blockedPeriods, icon: FiSlash, color: 'orange' },
-    { label: 'Available Tables', value: `${s.availableTables}/${s.totalTables}`, icon: FiCheckSquare, color: 'slate' },
+    { label: isToday ? "Today's Reservations" : 'Reservations', value: s.todayReservations, icon: FiCalendar, color: 'indigo', to: schedulerUrl, hint: 'See the timeline' },
+    { label: 'Expected Guests', value: s.expectedGuests, icon: FiUsers, color: 'emerald', to: schedulerUrl, hint: 'See the timeline' },
+    { label: 'Occupancy', value: `${s.occupancy}%`, icon: FiTrendingUp, color: 'blue', to: schedulerUrl, hint: 'See tables in use' },
+    { label: 'Upcoming Arrivals', value: s.upcomingArrivals, icon: FiClock, color: 'amber', to: schedulerUrl, hint: 'See arrivals' },
+    { label: 'Blocked Periods', value: s.blockedPeriods, icon: FiSlash, color: 'orange', to: '/blocked', hint: 'Manage blocks' },
+    { label: 'Available Tables', value: `${s.availableTables}/${s.totalTables}`, icon: FiCheckSquare, color: 'slate', to: '/floor-plan', hint: 'Open floor plan' },
   ];
+
+  // Status filter chips for the day's list (only statuses that exist show up).
+  const statusCounts = data.todayReservations.reduce<Record<string, number>>((acc, r) => {
+    acc[r.status] = (acc[r.status] || 0) + 1;
+    return acc;
+  }, {});
+  // CANCELLED is future-proofing: the summary endpoint currently excludes
+  // cancelled rows, so that chip only appears if the server ever includes them.
+  const STATUS_ORDER: { value: ReservationStatus; label: string }[] = [
+    { value: 'PENDING', label: 'Pending' },
+    { value: 'CONFIRMED', label: 'Confirmed' },
+    { value: 'SEATED', label: 'Arrived' },
+    { value: 'COMPLETED', label: 'Completed' },
+    { value: 'CANCELLED', label: 'Cancelled' },
+  ];
+  const visibleReservations =
+    statusFilter === 'ALL'
+      ? data.todayReservations
+      : data.todayReservations.filter((r) => r.status === statusFilter);
   const colorMap: Record<string, string> = {
     indigo: 'bg-indigo-50 text-indigo-600',
     emerald: 'bg-emerald-50 text-emerald-600',
@@ -150,7 +185,7 @@ export default function DashboardPage() {
           </div>
         </div>
         {week.length > 0 ? (
-          <WeekOverview days={week} selectedDate={selectedDate} today={todayStr()} onSelect={setSelectedDate} />
+          <WeekOverview days={week} selectedDate={selectedDate} today={todayStr()} onSelect={selectDay} />
         ) : (
           <p className="text-sm text-slate-400">No data for this week.</p>
         )}
@@ -163,18 +198,26 @@ export default function DashboardPage() {
         onChanged={load}
       />
 
-      {/* Stat cards */}
+      {/* Stat cards — each one opens the page where that number lives */}
       <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {cards.map((c) => {
           const Icon = c.icon;
           return (
-            <div key={c.label} className="bg-white rounded-xl border border-slate-200 p-4">
+            <button
+              key={c.label}
+              onClick={() => navigate(c.to)}
+              title={c.hint}
+              className="group text-left bg-white rounded-xl border border-slate-200 p-4 transition-all hover:border-indigo-300 hover:shadow-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+            >
               <div className={`w-10 h-10 rounded-lg flex items-center justify-center mb-3 ${colorMap[c.color]}`}>
                 <Icon size={20} />
               </div>
               <p className="text-2xl font-bold text-slate-800">{c.value}</p>
               <p className="text-xs text-slate-500 mt-0.5">{c.label}</p>
-            </div>
+              <p className="text-[11px] text-indigo-500 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                {c.hint} →
+              </p>
+            </button>
           );
         })}
       </div>
@@ -192,20 +235,63 @@ export default function DashboardPage() {
                 onClick={() => navigate(`/reservations?date=${selectedDate}`)}
                 className="text-xs font-medium text-indigo-600 hover:underline inline-flex items-center gap-1"
               >
-                Open in scheduler <FiExternalLink size={12} />
+                Open in scheduler <FiChevronRight size={13} />
               </button>
             </div>
           </div>
+          {/* What to see — status filter chips (only statuses present that day) */}
+          {data.todayReservations.length > 0 && (
+            <div className="px-5 py-2.5 border-b border-slate-100 flex flex-wrap gap-1.5">
+              <button
+                onClick={() => setStatusFilter('ALL')}
+                aria-pressed={statusFilter === 'ALL'}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                  statusFilter === 'ALL'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                All ({data.todayReservations.length})
+              </button>
+              {STATUS_ORDER.filter((st) => statusCounts[st.value]).map((st) => (
+                <button
+                  key={st.value}
+                  onClick={() => setStatusFilter(statusFilter === st.value ? 'ALL' : st.value)}
+                  aria-pressed={statusFilter === st.value}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+                    statusFilter === st.value
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                  }`}
+                >
+                  {st.label} ({statusCounts[st.value]})
+                </button>
+              ))}
+            </div>
+          )}
           <div className="divide-y divide-slate-100 max-h-[420px] overflow-y-auto tb-scroll">
             {data.todayReservations.length === 0 && (
               <p className="px-5 py-8 text-center text-slate-400 text-sm">
                 No reservations {isToday ? 'today' : `on ${fmtShort(selectedDate)}`}.
               </p>
             )}
-            {data.todayReservations.map((r) => (
-              <div key={r.id} className="px-5 py-3 flex items-center justify-between hover:bg-slate-50">
-                <div>
-                  <p className="text-sm font-medium text-slate-800">
+            {data.todayReservations.length > 0 && visibleReservations.length === 0 && (
+              <p className="px-5 py-8 text-center text-slate-400 text-sm">
+                No {STATUS_ORDER.find((st) => st.value === statusFilter)?.label.toLowerCase()} reservations —{' '}
+                <button onClick={() => setStatusFilter('ALL')} className="text-indigo-600 hover:underline">
+                  show all
+                </button>
+              </p>
+            )}
+            {visibleReservations.map((r) => (
+              <button
+                key={r.id}
+                onClick={() => navigate(`/reservations?date=${r.date}&focus=${r.id}`)}
+                title="Show in scheduler"
+                className="group w-full text-left px-5 py-3 flex items-center justify-between gap-2 hover:bg-indigo-50/50 focus:outline-none focus-visible:bg-indigo-50 transition-colors"
+              >
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-slate-800 truncate">
                     {r.name} {r.surname}{' '}
                     <span className="text-slate-400 font-normal">· {r.guests} guests</span>
                   </p>
@@ -214,8 +300,14 @@ export default function DashboardPage() {
                     {r.occasion ? ` · ${r.occasion}` : ''}
                   </p>
                 </div>
-                {statusBadge(r.status)}
-              </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {statusBadge(r.status)}
+                  <FiChevronRight
+                    size={15}
+                    className="text-slate-300 group-hover:text-indigo-500 transition-colors"
+                  />
+                </div>
+              </button>
             ))}
           </div>
         </div>
@@ -231,14 +323,25 @@ export default function DashboardPage() {
                 <p className="px-5 py-6 text-center text-slate-400 text-sm">Nothing upcoming.</p>
               )}
               {data.upcomingReservations.map((r) => (
-                <div key={r.id} className="px-5 py-2.5">
-                  <p className="text-sm font-medium text-slate-700">
-                    {r.name} {r.surname}
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {r.date} · {r.startTime} · {r.guests} guests
-                  </p>
-                </div>
+                <button
+                  key={r.id}
+                  onClick={() => navigate(`/reservations?date=${r.date}&focus=${r.id}`)}
+                  title="Show in scheduler"
+                  className="group w-full text-left px-5 py-2.5 flex items-center justify-between gap-2 hover:bg-indigo-50/50 focus:outline-none focus-visible:bg-indigo-50 transition-colors"
+                >
+                  <div className="min-w-0">
+                    <p className="text-sm font-medium text-slate-700 truncate">
+                      {r.name} {r.surname}
+                    </p>
+                    <p className="text-xs text-slate-500">
+                      {fmtShort(r.date)} · {r.startTime} · {r.guests} guests
+                    </p>
+                  </div>
+                  <FiChevronRight
+                    size={14}
+                    className="shrink-0 text-slate-300 group-hover:text-indigo-500 transition-colors"
+                  />
+                </button>
               ))}
             </div>
           </div>
@@ -251,17 +354,42 @@ export default function DashboardPage() {
               {data.recentActivity.length === 0 && (
                 <p className="px-5 py-6 text-center text-slate-400 text-sm">No recent activity.</p>
               )}
-              {data.recentActivity.map((a) => (
-                <div key={a.id} className="px-5 py-2.5 text-xs">
-                  <span className="font-medium text-slate-700 capitalize">
-                    {a.action.replace(/_/g, ' ')}
-                  </span>
-                  {a.customer && <span className="text-slate-500"> · {a.customer}</span>}
-                  <span className="text-slate-400 block">
-                    {new Date(a.timestamp).toLocaleString()}
-                  </span>
-                </div>
-              ))}
+              {data.recentActivity.map((a) => {
+                const linkable = !!(a.reservationId && a.date);
+                const inner = (
+                  <>
+                    <div className="min-w-0">
+                      <span className="font-medium text-slate-700 capitalize">
+                        {a.action.replace(/_/g, ' ')}
+                      </span>
+                      {a.customer && <span className="text-slate-500"> · {a.customer}</span>}
+                      <span className="text-slate-400 block">
+                        {new Date(a.timestamp).toLocaleString()}
+                      </span>
+                    </div>
+                    {linkable && (
+                      <FiChevronRight
+                        size={14}
+                        className="shrink-0 text-slate-300 group-hover:text-indigo-500 transition-colors"
+                      />
+                    )}
+                  </>
+                );
+                return linkable ? (
+                  <button
+                    key={a.id}
+                    onClick={() => navigate(`/reservations?date=${a.date}&focus=${a.reservationId}`)}
+                    title="Show this reservation in the scheduler"
+                    className="group w-full text-left px-5 py-2.5 text-xs flex items-center justify-between gap-2 hover:bg-indigo-50/50 focus:outline-none focus-visible:bg-indigo-50 transition-colors"
+                  >
+                    {inner}
+                  </button>
+                ) : (
+                  <div key={a.id} className="px-5 py-2.5 text-xs flex items-center justify-between gap-2">
+                    {inner}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

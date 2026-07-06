@@ -11,6 +11,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { CurrentUser, JwtAuthGuard, StaffGuard } from '../auth/guards';
 import { JwtPayload } from '../auth/jwt.strategy';
@@ -29,7 +30,9 @@ export class ReservationsController {
     private audit: AuditService,
   ) {}
 
-  /** Public customer booking. */
+  /** Public customer booking. Rate-limited per IP to prevent booking spam
+   *  (there is no server-side phone verification). */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post()
   create(@Body() dto: CreateCustomerReservationDto) {
     return this.reservations.createCustomer(dto);

@@ -20,5 +20,10 @@
   },
   "devDependencies": {
     "concurrently": "^9.1.0"
+  },
+  "overrides": {
+    "@nestjs/platform-express": {
+      "multer": "^2.2.0"
+    }
   }
 }

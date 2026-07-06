@@ -6,6 +6,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
+import { BCRYPT_ROUNDS } from '../config/env';
 import { JwtPayload } from './jwt.strategy';
 import { serializeRestaurant } from '../common/serializers';
 
@@ -124,7 +125,7 @@ export class AuthService {
     if (!(await bcrypt.compare(currentPassword, record.passwordHash))) {
       throw new UnauthorizedException('Current password is incorrect');
     }
-    const passwordHash = await bcrypt.hash(newPassword, 10);
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     if (payload.role === 'admin') {
       await this.prisma.admin.update({ where: { id: payload.sub }, data: { passwordHash } });
     } else {

@@ -12,8 +12,32 @@ import {
 
 const prisma = new PrismaClient();
 
+const BCRYPT_ROUNDS = 12;
+const IS_PROD = process.env.NODE_ENV === 'production';
+
+// Seed passwords must come from env in production (and be non-trivial) so the
+// well-known demo credentials are never written to a live database. In dev we
+// fall back to the friendly demo passwords documented in the README.
+function seedPassword(envVar: string, demoDefault: string): string {
+  const v = process.env[envVar];
+  if (v && v.length >= 8) return v;
+  if (IS_PROD) {
+    throw new Error(
+      `${envVar} must be set (>= 8 chars) to seed in production. ` +
+        'Refusing to seed weak demo credentials into a live database.',
+    );
+  }
+  return demoDefault;
+}
+
+const ADMIN_PASSWORD = seedPassword('SEED_ADMIN_PASSWORD', seedAdmin.password);
+const OWNER_PASSWORD = seedPassword('SEED_OWNER_PASSWORD', 'password');
+
 async function createRestaurant(r: SeedRestaurant) {
-  const passwordHash = await bcrypt.hash(r.owner.password, 10);
+  const passwordHash = await bcrypt.hash(
+    IS_PROD ? OWNER_PASSWORD : r.owner.password,
+    BCRYPT_ROUNDS,
+  );
 
   const restaurant = await prisma.restaurant.create({
     data: {
@@ -193,7 +217,7 @@ async function main() {
     data: {
       email: seedAdmin.email,
       name: seedAdmin.name,
-      passwordHash: await bcrypt.hash(seedAdmin.password, 10),
+      passwordHash: await bcrypt.hash(ADMIN_PASSWORD, BCRYPT_ROUNDS),
     },
   });
 
@@ -220,7 +244,10 @@ async function main() {
         create: {
           email: 'owner@demobistro.ge',
           name: 'Demo Owner',
-          passwordHash: await bcrypt.hash('password', 10),
+          passwordHash: await bcrypt.hash(
+            IS_PROD ? OWNER_PASSWORD : 'password',
+            BCRYPT_ROUNDS,
+          ),
           firstLogin: true,
         },
       },
@@ -235,10 +262,15 @@ async function main() {
     blocked: await prisma.blockedPeriod.count(),
   };
   console.log('Done:', counts);
-  console.log('\nLogins:');
-  console.log('  Admin:  admin@tablebooker.ge / admin');
-  console.log('  Staff:  owner@shavilomi.ge / password  (and owner@<slug>.ge)');
-  console.log('  Wizard: owner@demobistro.ge / password  (first login)');
+  // Never print credentials in production logs.
+  if (!IS_PROD) {
+    console.log('\nLogins:');
+    console.log('  Admin:  admin@tablebooker.ge / admin');
+    console.log('  Staff:  owner@shavilomi.ge / password  (and owner@<slug>.ge)');
+    console.log('  Wizard: owner@demobistro.ge / password  (first login)');
+  } else {
+    console.log('\nSeeded with credentials from SEED_ADMIN_PASSWORD / SEED_OWNER_PASSWORD.');
+  }
 }
 
 main()

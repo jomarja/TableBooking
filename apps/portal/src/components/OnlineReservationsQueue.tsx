@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { FiCheck, FiX, FiExternalLink, FiInbox } from 'react-icons/fi';
+import { FiCheck, FiX, FiInbox, FiChevronRight, FiUser } from 'react-icons/fi';
 import { api } from '../api/client';
 import type { Reservation, Restaurant } from '../types';
 import { ChannelIcon } from './channel';
@@ -70,7 +70,7 @@ export function OnlineReservationsQueue({ pending, restaurant, onChanged }: Prop
   const showInScheduler = (r: Reservation) =>
     navigate(`/reservations?date=${r.date}&focus=${r.id}`);
   const openProfile = (r: Reservation) =>
-    r.phone ? navigate(`/customers/${encodeURIComponent(r.phone)}`) : showInScheduler(r);
+    r.phone && navigate(`/customers/${encodeURIComponent(r.phone)}`);
 
   return (
     <div className="bg-white rounded-xl border border-slate-200">
@@ -93,16 +93,21 @@ export function OnlineReservationsQueue({ pending, restaurant, onChanged }: Prop
           </p>
         ) : (
           pending.map((r) => (
-            <div key={r.id} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 hover:bg-slate-50">
+            <div key={r.id} className="px-5 py-3 flex flex-wrap items-center justify-between gap-3 hover:bg-indigo-50/40 transition-colors">
+              {/* Row body → scheduler (same contract as every dashboard list) */}
               <button
-                onClick={() => openProfile(r)}
-                className="text-left min-w-0 flex-1"
-                title="Open customer profile"
+                onClick={() => showInScheduler(r)}
+                className="group text-left min-w-0 flex-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded-lg"
+                title="Show in scheduler"
               >
                 <p className="text-sm font-medium text-slate-800 truncate flex items-center gap-1.5">
                   <ChannelIcon channel={r.channel} size={12} className="shrink-0 text-slate-400" />
                   {r.name} {r.surname}
                   <span className="font-normal text-slate-400">· {r.guests} guests</span>
+                  <FiChevronRight
+                    size={13}
+                    className="shrink-0 text-slate-300 group-hover:text-indigo-500 transition-colors"
+                  />
                 </p>
                 <p className="text-xs text-slate-500">
                   {r.date} · {r.startTime}–{r.endTime} · {tableLabel(r)}
@@ -126,13 +131,15 @@ export function OnlineReservationsQueue({ pending, restaurant, onChanged }: Prop
                 >
                   <FiX size={14} /> Decline
                 </button>
-                <button
-                  onClick={() => showInScheduler(r)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
-                  title="Show in scheduler"
-                >
-                  <FiExternalLink size={15} />
-                </button>
+                {r.phone && (
+                  <button
+                    onClick={() => openProfile(r)}
+                    className="p-1.5 rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-600"
+                    title="Customer profile"
+                  >
+                    <FiUser size={15} />
+                  </button>
+                )}
               </div>
             </div>
           ))

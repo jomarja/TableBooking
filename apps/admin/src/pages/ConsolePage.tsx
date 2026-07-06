@@ -16,6 +16,7 @@ import {
 import { api, PORTAL_URL, type AdminRestaurant, type AdminStats } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import { CreateRestaurantModal } from '../components/CreateRestaurantModal';
+import { tempPassword } from '../lib/tempPassword';
 import { EditRestaurantModal } from '../components/EditRestaurantModal';
 import { AuditLogsView } from '../components/AuditLogsView';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -64,10 +65,18 @@ export default function ConsolePage() {
   };
 
   const resetPw = async (r: AdminRestaurant) => {
-    const pw = prompt(`New password for ${r.name} (owner: ${r.staff[0]?.email})`, 'password');
+    const suggested = tempPassword();
+    const pw = prompt(
+      `New password for ${r.name} (owner: ${r.staff[0]?.email}).\nA strong one is suggested below — share it with the owner.`,
+      suggested,
+    );
     if (!pw) return;
+    if (pw.length < 8) {
+      alert('Password must be at least 8 characters.');
+      return;
+    }
     await act(() => api.resetPassword(r.id, pw), r.id);
-    alert('Password reset. The owner will be prompted to complete setup on next login.');
+    alert(`Password reset to:\n\n${pw}\n\nShare it with the owner — they'll be prompted to change it on next login.`);
   };
 
   // "Login as Restaurant" — mint an impersonation token and hand off to the

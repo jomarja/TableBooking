@@ -33,8 +33,8 @@ export default function AccountPage() {
   const savePassword = async () => {
     setPwError('');
     setPwSaved(false);
-    if (next.length < 6) {
-      setPwError('New password must be at least 6 characters.');
+    if (next.length < 8) {
+      setPwError('New password must be at least 8 characters.');
       return;
     }
     if (next !== repeat) {

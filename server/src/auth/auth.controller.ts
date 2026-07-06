@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Patch, Post, Req, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import type { Request } from 'express';
 import { AuthService } from './auth.service';
 import { AuditService } from '../audit/audit.service';
@@ -13,11 +14,14 @@ export class AuthController {
     private audit: AuditService,
   ) {}
 
+  // Tight per-IP limit on credential endpoints to blunt brute-force.
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
   @Post('auth/login')
   staffLogin(@Body() dto: LoginDto) {
     return this.auth.staffLogin(dto.email, dto.password);
   }
 
+  @Throttle({ default: { limit: 8, ttl: 60_000 } })
   @Post('admin/login')
   adminLogin(@Body() dto: LoginDto) {
     return this.auth.adminLogin(dto.email, dto.password);

@@ -6,6 +6,7 @@ import {
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 import { serializeRestaurant } from '../common/serializers';
+import { BCRYPT_ROUNDS } from '../config/env';
 import { AuthService } from '../auth/auth.service';
 import { AuditService, type AuditActor, type AuditQuery } from '../audit/audit.service';
 
@@ -50,7 +51,7 @@ export class AdminService {
       throw new BadRequestException('A staff account with this email exists');
     }
 
-    const passwordHash = await bcrypt.hash(dto.ownerPassword || 'password', 10);
+    const passwordHash = await bcrypt.hash(dto.ownerPassword, BCRYPT_ROUNDS);
 
     const restaurant = await this.prisma.restaurant.create({
       data: {
@@ -209,7 +210,7 @@ export class AdminService {
       where: { restaurantId: id },
     });
     if (!staff.length) throw new NotFoundException('No staff for restaurant');
-    const passwordHash = await bcrypt.hash(newPassword || 'password', 10);
+    const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
     await this.prisma.staff.updateMany({
       where: { restaurantId: id },
       data: { passwordHash, firstLogin: true },

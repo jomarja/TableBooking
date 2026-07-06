@@ -225,5 +225,10 @@ export interface DashboardSummary {
     user: string;
     timestamp: string;
     customer: string;
+    /** Deep-link target — the affected reservation. Defensive-nullable; in
+     *  practice always set (events are hard-deleted with their reservation). */
+    reservationId?: string | null;
+    /** The reservation's date, for the scheduler deep-link. */
+    date?: string | null;
   }[];
 }

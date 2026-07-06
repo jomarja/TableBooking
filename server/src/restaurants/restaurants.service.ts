@@ -402,10 +402,10 @@ export class RestaurantsService {
     return this.findOneForStaff(id);
   }
 
-  /** reservation-config endpoint payload. */
+  /** reservation-config endpoint payload (public — bookable restaurants only). */
   async reservationConfig(id: string) {
     const r = await this.prisma.restaurant.findFirst({
-      where: { id, isArchived: false },
+      where: { id, isArchived: false, status: 'APPROVED', published: true },
     });
     if (!r) throw new NotFoundException('Restaurant not found');
     const rules: any = r.reservationRules ?? {};

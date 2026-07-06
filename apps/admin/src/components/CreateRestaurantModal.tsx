@@ -1,8 +1,9 @@
 import { useState } from 'react';
-import { FiX } from 'react-icons/fi';
+import { FiRefreshCw, FiX } from 'react-icons/fi';
 import { api } from '../api/client';
 import { NumberField } from './NumberField';
 import { Select } from './Select';
+import { tempPassword } from '../lib/tempPassword';
 
 interface Props {
   onClose: () => void;
@@ -10,14 +11,15 @@ interface Props {
 }
 
 export function CreateRestaurantModal({ onClose, onCreated }: Props) {
-  const [form, setForm] = useState({
+  const [form, setForm] = useState(() => ({
     name: '',
     cuisine: 'georgian',
     address: '',
     ownerEmail: '',
     ownerName: '',
-    ownerPassword: 'password',
-  });
+    // Strong auto-generated temp password — the owner changes it on first login.
+    ownerPassword: tempPassword(),
+  }));
   const [rating, setRating] = useState(0);
   const [priceRange, setPriceRange] = useState('');
   const [saving, setSaving] = useState(false);
@@ -29,6 +31,10 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
     setError('');
     if (!form.name || !form.ownerEmail) {
       setError('Name and owner email are required.');
+      return;
+    }
+    if (form.ownerPassword.length < 8) {
+      setError('Temporary password must be at least 8 characters.');
       return;
     }
     setSaving(true);
@@ -86,7 +92,20 @@ export function CreateRestaurantModal({ onClose, onCreated }: Props) {
             <Field label="Owner email *"><input className="tb-input" type="email" value={form.ownerEmail} onChange={(e) => set('ownerEmail', e.target.value)} /></Field>
             <Field label="Owner name"><input className="tb-input" value={form.ownerName} onChange={(e) => set('ownerName', e.target.value)} /></Field>
           </div>
-          <Field label="Temporary password"><input className="tb-input" value={form.ownerPassword} onChange={(e) => set('ownerPassword', e.target.value)} /></Field>
+          <Field label="Temporary password">
+            <div className="flex gap-2">
+              <input className="tb-input flex-1 font-mono" value={form.ownerPassword} onChange={(e) => set('ownerPassword', e.target.value)} />
+              <button
+                type="button"
+                onClick={() => set('ownerPassword', tempPassword())}
+                title="Generate a new password"
+                className="shrink-0 px-3 rounded-lg border border-slate-300 text-slate-500 hover:bg-slate-50"
+              >
+                <FiRefreshCw size={15} />
+              </button>
+            </div>
+            <span className="text-xs text-slate-400 mt-1 block">Share with the owner — they set their own on first login.</span>
+          </Field>
 
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>

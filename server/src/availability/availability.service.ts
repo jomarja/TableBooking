@@ -70,7 +70,7 @@ export class AvailabilityService {
    */
   async getAvailability(restaurantId: string, date: string) {
     const restaurant = await this.prisma.restaurant.findFirst({
-      where: { id: restaurantId, isArchived: false },
+      where: { id: restaurantId, isArchived: false, status: 'APPROVED', published: true },
       include: { tables: true },
     });
     if (!restaurant) throw new NotFoundException('Restaurant not found');
@@ -276,7 +276,7 @@ export class AvailabilityService {
   /** Day-by-day status across a date range — powers the calendar colouring. */
   async calendarFor(restaurantId: string, from: string, to: string) {
     const restaurant = await this.prisma.restaurant.findFirst({
-      where: { id: restaurantId, isArchived: false },
+      where: { id: restaurantId, isArchived: false, status: 'APPROVED', published: true },
       include: { tables: true },
     });
     if (!restaurant) throw new NotFoundException('Restaurant not found');
@@ -310,7 +310,7 @@ export class AvailabilityService {
   /** First upcoming date (within ~60 days) that can take a booking. */
   async nextAvailability(restaurantId: string, from: string, guests?: number) {
     const restaurant = await this.prisma.restaurant.findFirst({
-      where: { id: restaurantId, isArchived: false },
+      where: { id: restaurantId, isArchived: false, status: 'APPROVED', published: true },
       include: { tables: true },
     });
     if (!restaurant) throw new NotFoundException('Restaurant not found');

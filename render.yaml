@@ -1,0 +1,98 @@
+# TableBooker — Render Blueprint (https://render.com/docs/blueprint-spec)
+#
+# Declares the API + three static frontends so environment is guaranteed at
+# deploy time. In particular JWT_SECRET is auto-generated (generateValue), which
+# is why the API can safely refuse to boot without it.
+#
+# Bring your own Postgres (Neon / Supabase / Render): set DATABASE_URL below.
+# To use Render's managed Postgres instead, uncomment the `databases:` block and
+# switch DATABASE_URL to the `fromDatabase` form shown in the comment.
+
+# databases:
+#   - name: tablebooker-db
+#     plan: free
+#     databaseName: tablebooker
+#     user: tablebooker
+
+services:
+  # ─── Backend API ───────────────────────────────────────────────────────────
+  - type: web
+    name: tablebooker-api
+    runtime: node
+    plan: free
+    rootDir: .
+    buildCommand: >-
+      npm install &&
+      npm --workspace=@tablebooker/server run prisma:generate &&
+      npm --workspace=@tablebooker/server run build
+    # Apply migrations, then start. migrate deploy is idempotent and never prompts.
+    startCommand: >-
+      npx prisma migrate deploy --schema=server/prisma/schema.prisma &&
+      node server/dist/main.js
+    healthCheckPath: /api/restaurants
+    envVars:
+      - key: NODE_ENV
+        value: production
+      # Strong secret generated once by Render — never committed, never a default.
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRES_IN
+        value: 1d
+      # Your Postgres connection string (Neon/Supabase/Render).
+      # For Render's managed DB instead, use:
+      #   fromDatabase: { name: tablebooker-db, property: connectionString }
+      - key: DATABASE_URL
+        sync: false
+      # Comma-separated deployed frontend origins (must match the static sites below).
+      - key: CORS_ORIGINS
+        sync: false
+      # Public URL of THIS service (e.g. https://tablebooker-api.onrender.com).
+      - key: API_BASE_URL
+        sync: false
+      # Strong seed credentials — required by the seed script in production.
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_OWNER_PASSWORD
+        sync: false
+
+  # ─── Customer frontend ─────────────────────────────────────────────────────
+  - type: web
+    runtime: static
+    name: tablebooker-customer
+    buildCommand: npm install && npm --workspace=@tablebooker/customer run build
+    staticPublishPath: apps/customer/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false # e.g. https://tablebooker-api.onrender.com/api
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ─── Staff portal ──────────────────────────────────────────────────────────
+  - type: web
+    runtime: static
+    name: tablebooker-portal
+    buildCommand: npm install && npm --workspace=@tablebooker/portal run build
+    staticPublishPath: apps/portal/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
+
+  # ─── Admin console ─────────────────────────────────────────────────────────
+  - type: web
+    runtime: static
+    name: tablebooker-admin
+    buildCommand: npm install && npm --workspace=@tablebooker/admin run build
+    staticPublishPath: apps/admin/dist
+    envVars:
+      - key: VITE_API_URL
+        sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

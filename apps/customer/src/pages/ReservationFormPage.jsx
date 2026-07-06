@@ -237,6 +237,7 @@ export default function ReservationFormPage() {
                     aria-invalid={!!errors.name}
                     className={inputCls(!!errors.name)}
                     placeholder="Enter your name"
+                    maxLength={100}
                   />
                   {errors.name && <p className="mt-1 text-sm text-red-500" role="alert">{errors.name}</p>}
                 </div>
@@ -259,6 +260,7 @@ export default function ReservationFormPage() {
                     aria-invalid={!!errors.surname}
                     className={inputCls(!!errors.surname)}
                     placeholder="Enter your surname"
+                    maxLength={100}
                   />
                   {errors.surname && <p className="mt-1 text-sm text-red-500" role="alert">{errors.surname}</p>}
                 </div>
@@ -309,6 +311,7 @@ export default function ReservationFormPage() {
                     aria-invalid={!!errors.email}
                     className={inputCls(!!errors.email)}
                     placeholder="you@example.com"
+                    maxLength={200}
                   />
                   {errors.email && <p className="mt-1 text-sm text-red-500" role="alert">{errors.email}</p>}
                 </div>
@@ -331,6 +334,7 @@ export default function ReservationFormPage() {
                     aria-invalid={!!errors.address}
                     className={inputCls(!!errors.address)}
                     placeholder="Street, city"
+                    maxLength={300}
                   />
                   {errors.address && <p className="mt-1 text-sm text-red-500" role="alert">{errors.address}</p>}
                 </div>
@@ -374,6 +378,7 @@ export default function ReservationFormPage() {
                     aria-label="Enter any special requests"
                     className={`${inputCls(!!errors.specialRequest)} resize-none`}
                     placeholder="Window table preferred, High chair required, Birthday cake..."
+                    maxLength={2000}
                   />
                   {errors.specialRequest && <p className="mt-1 text-sm text-red-500" role="alert">{errors.specialRequest}</p>}
                 </div>

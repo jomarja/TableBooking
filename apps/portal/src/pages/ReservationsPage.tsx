@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw, FiEdit2, FiUserCheck, FiCheckCircle, FiXCircle, FiClock, FiCopy, FiTrash2 } from 'react-icons/fi';
+import { FiPlus, FiChevronLeft, FiChevronRight, FiCheck, FiBell, FiRefreshCw, FiRotateCcw, FiEdit2, FiUserCheck, FiCheckCircle, FiXCircle, FiClock, FiCopy, FiTrash2, FiMaximize, FiMinimize } from 'react-icons/fi';
 import { api } from '../api/client';
 import { useAuth } from '../context/AuthContext';
 import type { BlockedPeriod, Reservation, Restaurant, TableModel } from '../types';
@@ -169,7 +169,7 @@ const VISUAL_DOT: Record<ResVisual, string> = {
 };
 
 export default function ReservationsPage() {
-  const { restaurant } = useAuth();
+  const { restaurant, impersonatedBy } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [focusId, setFocusId] = useState<string | null>(null);
   const [view, setView] = useState<View>('table');
@@ -436,13 +436,45 @@ export default function ReservationsPage() {
     [applyState, recordAction],
   );
 
+  // Expanded (full-screen) scheduler view. Esc exits — unless a modal, an open
+  // dropdown/date-picker, or the right-click context menu currently owns Escape.
+  const [expanded, setExpanded] = useState(false);
+  useEffect(() => {
+    if (!expanded) return;
+    // Lock body scroll so wheeling over the overlay can't silently move the
+    // page underneath (which would jump on exit).
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (editing || creating) return; // the reservation modal owns Esc
+      // A popover/menu owns Esc first (it closes itself on this same keypress).
+      if (document.querySelector('[role="listbox"], [role="dialog"], [role="menu"]')) return;
+      setExpanded(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [expanded, editing, creating]);
+
   return (
-    <div className="space-y-4">
+    <div
+      className={
+        expanded
+          ? `fixed inset-x-0 bottom-0 z-40 bg-slate-100 overflow-y-auto overscroll-contain p-4 sm:p-6 space-y-4 ${
+              impersonatedBy ? 'top-10' : 'top-0'
+            }`
+          : 'space-y-4'
+      }
+    >
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-2xl font-bold text-slate-800">Reservations</h2>
           <p className="text-slate-500 text-sm">
             Timeline scheduler · drag to move or resize · scroll right for the next day
+            {expanded && ' · Esc to exit full screen'}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -484,6 +516,18 @@ export default function ReservationsPage() {
               </button>
             ))}
           </div>
+          <button
+            onClick={() => setExpanded((v) => !v)}
+            className={`p-2 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${
+              expanded
+                ? 'border-indigo-300 bg-indigo-50 text-indigo-600'
+                : 'border-slate-200 bg-white text-slate-500 hover:bg-slate-50'
+            }`}
+            title={expanded ? 'Exit full screen (Esc)' : 'Expand scheduler to full screen'}
+            aria-label={expanded ? 'Exit full screen' : 'Expand scheduler to full screen'}
+          >
+            {expanded ? <FiMinimize size={16} /> : <FiMaximize size={16} />}
+          </button>
           <button
             onClick={toggleNowLine}
             role="switch"
@@ -544,6 +588,8 @@ export default function ReservationsPage() {
           }}
           preventBlocks={!restaurant?.reservationRules?.allowReservationsOverBlocks}
           onToast={(m) => showToast(m)}
+          expanded={expanded}
+          impersonating={!!impersonatedBy}
         />
       )}
 
@@ -635,6 +681,8 @@ function TableScheduler({
   onCreateAt,
   preventBlocks,
   onToast,
+  expanded,
+  impersonating,
 }: {
   tables: TableModel[];
   reservations: Reservation[];
@@ -655,6 +703,8 @@ function TableScheduler({
   onCreateAt: (tableId: string, date: string, startMin: number) => void;
   preventBlocks: boolean;
   onToast: (msg: string) => void;
+  expanded: boolean;
+  impersonating: boolean;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [pxPerHour, setPxPerHour] = useState(DEFAULT_PX_PER_HOUR);
@@ -800,6 +850,16 @@ function TableScheduler({
   previewRef.current = preview;
   // Right-click context menu (quick actions) anchored at the cursor.
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; res: Reservation } | null>(null);
+
+  // Esc closes the right-click menu first (before any full-screen exit).
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setCtxMenu(null); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [ctxMenu]);
 
   // All tick positions across the visible range: whole hours + half hours.
   // Stop *before* rangeEnd so there's no dangling "00:00" tick/label hanging
@@ -1252,18 +1312,27 @@ function TableScheduler({
 
   return (
     <>
-    <div className="relative bg-white rounded-xl border border-slate-200 overflow-hidden">
+    <div className="relative isolate bg-white rounded-xl border border-slate-200 overflow-hidden">
       {/* Floating day indicator — always shows which day is in view so staff
-          never lose orientation while scrolling across the window. */}
+          never lose orientation while scrolling across the window. z-[60] keeps
+          it above the sticky header (z-50); `isolate` on the card confines this
+          whole z-stack so nothing bleeds over the sidebar/menus outside it. */}
       {days[inViewDay] && (
-        <div className="pointer-events-none absolute top-1.5 left-1/2 -translate-x-1/2 z-30 bg-slate-800/90 text-white text-[11px] font-semibold px-2.5 py-0.5 rounded-full shadow-md">
+        <div className="pointer-events-none absolute top-1.5 left-1/2 -translate-x-1/2 z-[60] bg-slate-800/90 text-white text-[11px] font-semibold px-2.5 py-0.5 rounded-full shadow-md">
           {dateLabel(days[inViewDay].date)}
         </div>
       )}
       <div
         ref={scrollRef}
         className="tb-scroll select-none"
-        style={{ overflow: 'auto', maxHeight: 'calc(100vh - 14rem)' }}
+        style={{
+          overflow: 'auto',
+          // Full-screen uses nearly the whole viewport; subtract extra for the
+          // impersonation banner when it's present so nothing is clipped.
+          maxHeight: expanded
+            ? `calc(100vh - ${impersonating ? '14rem' : '11.5rem'})`
+            : 'calc(100vh - 14rem)',
+        }}
         onScroll={onSchedScroll}
         onPointerDown={(e) => {
           // Middle-mouse drag pans from anywhere (Figma/Miro style); trackpad
@@ -1278,8 +1347,10 @@ function TableScheduler({
             empty filler column appears after it. On wider viewports the area to
             the right is just the (white) card background — continuous, no gap. */}
         <div style={{ width: width + LABEL_W }}>
-          {/* Header row: table label column + time axis */}
-          <div className="flex sticky top-0 z-20 select-none" style={{ background: '#f8fafc' }}>
+          {/* Header row: table label column + time axis. z-50 keeps it above the
+              sticky row-label column (z-40), so the corner never gets covered
+              when scrolling vertically. */}
+          <div className="flex sticky top-0 z-50 select-none" style={{ background: '#f8fafc' }}>
             {/* Table column header — holds the zoom controls. Sticky on the X
                 axis too so it stays pinned while the timeline scrolls. */}
             <div className="w-40 flex-shrink-0 sticky left-0 z-20 flex flex-col justify-between px-3 py-2 border-b border-r border-slate-200" style={{ background: '#f8fafc' }}>
@@ -1391,7 +1462,8 @@ function TableScheduler({
 
           {/* Body — relative so the now-line can span every row as one
               continuous overlay (drawn above the zone strips, borders and
-              shading, but beneath the sticky label column which is z-10). */}
+              shading, but beneath the sticky label column which is z-40 and the
+              sticky header row which is z-50). */}
           <div className="relative">
           {/* Rows grouped by zone */}
           {grouped.map(([zone, zoneTables]) => (
@@ -1733,7 +1805,7 @@ function TableScheduler({
           ))}
           {/* one continuous now-line across the whole body, at z-[5] so it sits
               above table-row content but BELOW the opaque sticky label cells
-              (z-10) and the zone-header strips (z-10), which clip it inside the
+              (z-40) and the zone-header strips (z-10), which clip it inside the
               label column and let it pass softly behind the zone headers. */}
           {showNow && nowAbs !== null && nowAbs >= rangeStart && nowAbs <= rangeEnd && tables.length > 0 && (
             <div
@@ -1762,6 +1834,7 @@ function TableScheduler({
           }}
         />
         <div
+          role="menu"
           className="fixed z-50 w-48 bg-white rounded-lg shadow-xl border border-slate-200 py-1 text-sm"
           style={{
             left: Math.min(ctxMenu.x, window.innerWidth - 200),

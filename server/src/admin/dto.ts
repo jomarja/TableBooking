@@ -7,20 +7,23 @@ import {
   IsOptional,
   IsString,
   Max,
+  MaxLength,
   Min,
+  MinLength,
 } from 'class-validator';
 
 export class CreateRestaurantDto {
-  @IsString() name!: string;
-  @IsOptional() @IsString() cuisine?: string;
-  @IsOptional() @IsString() address?: string;
-  @IsOptional() @IsString() website?: string;
-  @IsOptional() @IsString() phone?: string;
+  @IsString() @MaxLength(200) name!: string;
+  @IsOptional() @IsString() @MaxLength(80) cuisine?: string;
+  @IsOptional() @IsString() @MaxLength(300) address?: string;
+  @IsOptional() @IsString() @MaxLength(300) website?: string;
+  @IsOptional() @IsString() @MaxLength(40) phone?: string;
   @IsOptional() @IsNumber() @Min(0) @Max(5) rating?: number;
-  @IsOptional() @IsString() priceRange?: string;
+  @IsOptional() @IsString() @MaxLength(40) priceRange?: string;
   @IsEmail() ownerEmail!: string;
-  @IsOptional() @IsString() ownerName?: string;
-  @IsOptional() @IsString() ownerPassword?: string;
+  @IsOptional() @IsString() @MaxLength(120) ownerName?: string;
+  // Required, non-trivial: the API never invents a default password.
+  @IsString() @MinLength(8) @MaxLength(128) ownerPassword!: string;
 }
 
 /** Admin can edit any of these core restaurant fields after creation. */
@@ -37,7 +40,7 @@ export class AdminUpdateRestaurantDto {
   @IsOptional() @IsBoolean() published?: boolean;
   @IsOptional() @IsBoolean() outdoorSeating?: boolean;
   @IsOptional() @IsBoolean() familyFriendly?: boolean;
-  @IsOptional() @IsString() description?: string;
+  @IsOptional() @IsString() @MaxLength(2000) description?: string;
 }
 
 export class SetStatusDto {
@@ -46,5 +49,5 @@ export class SetStatusDto {
 }
 
 export class ResetPasswordDto {
-  @IsString() password!: string;
+  @IsString() @MinLength(8) @MaxLength(128) password!: string;
 }

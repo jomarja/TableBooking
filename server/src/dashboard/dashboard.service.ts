@@ -138,7 +138,7 @@ export class DashboardService {
       where: { reservation: { restaurantId } },
       orderBy: { timestamp: 'desc' },
       take: 12,
-      include: { reservation: { select: { name: true, surname: true } } },
+      include: { reservation: { select: { name: true, surname: true, date: true } } },
     });
 
     return {
@@ -164,6 +164,9 @@ export class DashboardService {
         customer: e.reservation
           ? `${e.reservation.name} ${e.reservation.surname}`.trim()
           : '',
+        // Deep-link target so the dashboard can jump to this booking in the scheduler.
+        reservationId: e.reservationId ?? null,
+        date: e.reservation?.date ?? null,
       })),
     };
   }
